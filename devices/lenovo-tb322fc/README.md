@@ -1,46 +1,73 @@
-# Lenovo Legion Y700 Gen4（TB322FC / `lenovo,elden`）
+# 联想拯救者 Y700 四代
 
-ArmadaOS Freedom 的 Y700 Gen4（TB322FC）适配目录。设备树兼容串为 `lenovo,elden`、`qcom,sm8750`，机型名为 "Lenovo Legion Y700 Gen4"。
+ArmadaOS Freedom 为 Y700 四代提供 kShimC 多系统启动、Steam 游戏模式和面向平板的输入与外设支持。本页记录 TB322FC 的功能状态、已知问题和开发入口。
 
-本目录维护板级描述与设备适配说明：四代与五代及其它受支持机型共用 `packages/kernel` 中的 Linux 7.2.6 基础内核和 ArmadaOS Freedom 补丁集，板级差异由各自设备树及按型号匹配的驱动补丁提供。
+| 项目 | 配置 |
+|---|---|
+| 型号 | Lenovo Legion Y700 Gen4 / TB322FC |
+| SoC | Qualcomm SM8750 |
+| 设备树标识 | `lenovo,elden`、`qcom,sm8750` |
+| 内核 | ArmadaOS Freedom 统一 Linux 7.2.6 |
+| Armada Control 配置 | `lenovo-tb322fc`，无风扇平板 |
 
-当前为 WIP：Android 启动、引导菜单与按键已在真机确认；机身 Linux 与 Steam 可用，触屏点击和滑动准确。显示初始化修正后，已确认启动进入 Steam、正常退出并重新打开 Steam 时实体画面和触屏均正常；这不代表所有显示切换与长期运行场景均已验证。其余项目见“未决事项”。
+## 功能状态
 
-## 内核与五代的关系
+| 功能 | 当前状态 |
+|---|---|
+| kShimC 启动菜单 | 中文菜单、方向和音量／电源键操作已确认 |
+| Android 启动 | 可从菜单进入原厂 Android |
+| 机身 Linux | 可进入 ArmadaOS 和 Steam 游戏模式 |
+| 触屏 | 坐标已修正，点击和滑动已确认正常 |
+| Steam 会话重开 | 显示初始化修正后，正常退出并重开 Steam 的画面与触屏已确认正常 |
+| G9 手柄 | 基础按键、单按／双击 Home 及 RGB 控制已确认正常 |
+| Armada Control | 使用四代独立配置，隐藏风扇相关入口 |
 
-| 设备 | SoC / 设备树 | 当前内核路径 |
-|---|---|---|
-| Y700 四代 TB322FC | SM8750 / `lenovo,elden` | `packages/kernel` 的统一 Linux 7.2.6，加四代设备树和补丁 |
-| Y700 五代 TB323FU | SM8850 / `lenovo,baldur` | 同一 `packages/kernel` 的统一 Linux 7.2.6，加五代设备树、驱动补丁及配套模块 |
+这些状态对应已完成的实机操作验证；长期稳定性及其它显示切换场景仍在验证中。
 
-统一构建产生同一版本的内核、完整模块树及两代各自的 DTB。五代已使用统一 7.2.6 启动到 Steam，并确认实体显示恢复；两代仍须使用各自的设备树和启动载荷，boot 镜像不能直接互刷。五代公共安装器及 OTA 接入尚未完成，不能把内核统一当作更新链路已经通过验收。
+## G9 手柄
 
-四代显示重开修正由 `0153`、`0154`、`0155` 内核补丁提供，相关行为按 `lenovo,elden` 匹配；`0154`／`0155` 的上下文已修正为适配统一 7.2.6。五代使用同一补丁集内独立匹配 Baldur 的显示支持。
+四代适配旧版 G9（USB `3537:1134`）：
 
-## G9 手柄与 Armada Control
+- 摇杆、十字键和 ABXY 可正常操作。
+- 单按 Home 打开原菜单，双击 Home 打开右侧快捷菜单。
+- 在 Armada Control 的 RGB 页面控制灯光开关、颜色和亮度。
 
-四代使用独立的 `lenovo-tb322fc` 设备配置，按机型识别 SM8750；该平板没有风扇，Armada Control 隐藏风扇相关入口。
+按键通过独立的 InputPlumber 设备配置与 `lenovo_legion_g9` 映射接入，灯光复用 GCM HID 后端。匹配同时考虑平板型号和手柄 ID，与五代的 G9 2026（`3537:1136`）配置分开维护。
 
-- 旧版 G9（USB `3537:1134`）通过独立 InputPlumber 设备配置和 `lenovo_legion_g9` 映射接入，仅匹配四代机型。
-- 已在真机确认摇杆、十字键、ABXY 和单按 Home 正常；双击 Home 打开右侧快捷菜单，单按 Home 保留原菜单行为。
-- Armada Control 的 RGB 开关、颜色和亮度控制已在真机确认，复用现有 GCM HID 后端。
-- 双击辅助程序按平板型号和手柄 ID 区分四代旧 G9 与五代 G9 2026（`3537:1136`），不扩大五代原有配置的匹配范围。
+## 已知问题与待完成项
 
-独立背键、IMU、震动、其它手柄模式及插拔／休眠恢复场景尚未完整验证。
+- **充电与双 USB：** 充电功率上报、快充兼容性及长边／短边端口行为仍需完善。
+- **安装与更新：** 公共安装流程仍在完善，OTA 源码策略与钩子已接入，完整的引导载荷同步及系统更新尚未通过端到端验证。
+- **启动器：** 手动／自动机型选择与默认启动项仅在本次启动内生效，持久化暂缓。TF 卡启动及高级启动操作不在上述已确认范围内。
+- **手柄扩展功能：** 独立背键、IMU、震动、其它手柄模式及插拔／休眠恢复尚未完整验证。
+- **相机：** 仅补齐设备树控制节点，功能未验证。
 
-## 文件
+## 内核与启动
 
-- `../../packages/kernel/dts/sm8750-lenovo-elden.dts`
-  从上游固定版本原样复制（byte-for-byte）的板级 DTS，保留原始 SPDX（BSD-3-Clause）与 Qualcomm 版权，不直接编辑。
-  来源：https://github.com/h0cheung/tb322fc-linux-kernel
-  固定提交：6f97250ead155fc3b980856323e99a4623dae73d
-  固定文件：https://github.com/h0cheung/tb322fc-linux-kernel/blob/6f97250ead155fc3b980856323e99a4623dae73d/arch/arm64/boot/dts/qcom/sm8750-lenovo-elden.dts
-- `../../packages/kernel/dts/sm8750-lenovo-elden.dts.patch`
-  在上述原始 DTS 之上叠加的本地 unified 补丁，只含面向运行时的最小适配。
-- `../../packages/kernel/dts/sm8750-lenovo-elden-camera.dtsi`
-  相机伴生片段：从同一固定提交的 `sm8750.dtsi` 第 3072–3309 行逐字摘出 `cci0`、`cci1`、`camss` 三个完整节点，置于 `&soc {}` 下，仅把缩进归一化一个 tab，保留源文件 BSD-3-Clause SPDX 与 Qualcomm 版权。它补齐板级 DTS 引用的 `&camss`、`&cci0`、`&cci0_i2c0`、`&cci1`、`&cci1_i2c0` 标签；不引入其它 SoC 差异，也不新增驱动。
+四代与[五代](../lenovo-tb323fu/README.md)共用 [`packages/kernel`](../../packages/kernel/) 中的 Linux 7.2.6 基础内核及 Freedom 补丁集。统一构建产生内核、完整模块树和两代各自的设备树；驱动中的板级行为按机型匹配。
 
-## 本地补丁内容
+四代使用 `lenovo,elden` / SM8750，五代使用 `lenovo,baldur` / SM8850。两代仍需各自的设备树和启动载荷，**boot 镜像不能互刷**。统一内核并不意味着两代已经共用安装包或完成 OTA 验证。
+
+四代 Steam 会话重开的显示修正由 `0153`、`0154`、`0155` 内核补丁提供，按 `lenovo,elden` 匹配；五代显示支持使用独立的 Baldur 匹配。
+
+## 源码与来源
+
+| 文件 | 用途 |
+|---|---|
+| [设备配置](../../system_files/usr/lib/armada/devices/lenovo-tb322fc.conf) | 机型识别、显示旋转和触屏选择 |
+| [板级 DTS](../../packages/kernel/dts/sm8750-lenovo-elden.dts) | 保留上游原始设备树 |
+| [DTS 适配补丁](../../packages/kernel/dts/sm8750-lenovo-elden.dts.patch) | 启动交接与运行时适配 |
+| [相机伴生片段](../../packages/kernel/dts/sm8750-lenovo-elden-camera.dtsi) | 补齐板级 DTS 引用的控制节点 |
+| [内核补丁](../../packages/kernel/patches/) | 显示、内存映射等驱动适配 |
+
+板级 DTS 原样取自 [h0cheung/tb322fc-linux-kernel](https://github.com/h0cheung/tb322fc-linux-kernel) 的固定提交 [`6f97250ead155fc3b980856323e99a4623dae73d`](https://github.com/h0cheung/tb322fc-linux-kernel/blob/6f97250ead155fc3b980856323e99a4623dae73d/arch/arm64/boot/dts/qcom/sm8750-lenovo-elden.dts)，保留 BSD-3-Clause SPDX 和 Qualcomm 版权；本项目的适配通过独立补丁维护。
+
+<details>
+<summary>设备树适配细节</summary>
+
+相机伴生片段来自同一固定提交的 `sm8750.dtsi` 第 3072–3309 行，摘出 `cci0`、`cci1`、`camss` 三个完整节点并置于 `&soc {}` 下，仅归一化缩进，保留源文件的 BSD-3-Clause SPDX 与 Qualcomm 版权。它补齐 `&camss`、`&cci0`、`&cci0_i2c0`、`&cci1`、`&cci1_i2c0` 标签，不新增驱动。
+
+DTS 适配补丁的主要内容：
 
 - 紧接 `#include "sm8750-pmics.dtsi"` 之后包含相机伴生片段。
 - 删除 `memory@a0000000` 节点及其 RAM 注释：内存节点由运行时引导 DT（kShim handoff_memory）重建，原作者的固定 RAM map 未在本机确认。
@@ -50,11 +77,4 @@ ArmadaOS Freedom 的 Y700 Gen4（TB322FC）适配目录。设备树兼容串为 
 - 保留原 DTS 的 `&apps_smmu` 覆盖（含 `qcom,preserve-boot-mappings`）：该属性的消费方是 `../../packages/kernel/patches/0146-iommu-arm-smmu-elden-boot-handoff.patch`，本目录不重复实现，也不引入全局 SMMU 变通。
 - 其余内容（音频、WiFi、USB、面板、触摸等）保持不变。
 
-## 未决事项
-
-- 充电功率上报、快充边界及双 USB 端口（长边／短边语义）仍需继续验证和完善。
-- OTA 的源码策略与钩子已实现，但引导载荷同步会超时，端到端更新尚未验收通过。
-- 设置中的手动／自动选择与默认条目目前只在本次会话内生效，持久化明确延后。
-- 相机未验证；此处只提供控制节点。
-
-构建与测试报告保存在仓库之外，本文件不作构建成功声明。本目录不规定固定的内建 DTB、内建 initramfs、固定内核命令行或 OTA 方式。
+</details>

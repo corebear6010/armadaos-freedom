@@ -19,16 +19,16 @@
 
 <p align="center">
   <a href="https://github.com/armada-os/armada"><img alt="Based on ArmadaOS" src="https://img.shields.io/badge/based_on-ArmadaOS-18181a?style=flat"></a>
-  <a href="devices/lenovo-tb323fu/README.md"><img alt="Tablet adaptation" src="https://img.shields.io/badge/device-Legion_Tab_Gen_5-285580?style=flat"></a>
+  <a href="#device-support"><img alt="Y700 Gen 4 and Gen 5 tablet adaptation" src="https://img.shields.io/badge/devices-Y700_Gen_4_%26_5-285580?style=flat"></a>
   <a href="LICENSE"><img alt="GPL-2.0-or-later license" src="https://img.shields.io/badge/license-GPL--2.0--or--later-18181a?style=flat"></a>
 </p>
 
 <p align="center">
-  <a href="devices/lenovo-tb323fu/README.md"><strong>Device support &amp; status</strong></a>
+  <a href="#device-support"><strong>Device support &amp; status</strong></a>
   ·
   <a href="#kshimc-multi-boot">Boot menu</a>
   ·
-  <a href="devices/lenovo-tb323fu/docs/SOURCES.md">Sources</a>
+  <a href="#documentation">Documentation</a>
   ·
   <a href="https://armadaos.dev/">Upstream documentation</a>
 </p>
@@ -38,29 +38,38 @@
 ArmadaOS Freedom is a community-maintained tablet branch based on
 [ArmadaOS](https://github.com/armada-os/armada). It retains the upstream gaming
 and desktop foundation while adapting boot, display, power, peripherals, and
-Armada Control to tablet hardware. Current device work covers
-**Y700 Gen 4 (TB322FC, SM8750)** and
-**Lenovo Legion Tab Gen 5 / Y700 (TB323FU, SM8850P)** on a shared Linux
-**7.2.6** kernel with device-specific board support. See the
-[Gen 4](devices/lenovo-tb322fc/README.md) and
-[Gen 5](devices/lenovo-tb323fu/README.md) status pages.
+Armada Control to tablet hardware.
 
 Highlights of the current adaptation:
 
 - Steam Gaming Mode and KDE Plasma, with FEX and Proton from ArmadaOS.
-- A shared 7.2.6 kernel build, full module tree and Gen 4/5 device trees under
-  `packages/kernel`, including Gen 5 driver backports and its speaker module.
+- A shared kernel build with device-specific device trees, drivers, and hardware
+  configuration.
 - kShimC multi-boot with separate internal-storage and TF-card Linux entries.
 - Device-matched 30 / 60 / 90 / 120 / 165 Hz display modes.
 - Dual-USB routing, audio, 5 GHz Wi-Fi, battery and temperature reporting.
-- G9 2026 controller mapping, RGB control, and double-Home quick access.
+- Tablet touch input, plus G9 / G9 2026 controller mapping, RGB control, and
+  double-Home quick access.
 - Tablet-aware Armada Control, including hiding fan controls on fanless devices.
 
-This is an adaptation source tree, not yet a complete, reproducibly built and
-fully validated tablet image release. Kernel/boot integration with the upstream
-image build and OTA update path is still in progress. Current limitations,
-including display and game stability issues, are tracked in the
-[device documentation](devices/lenovo-tb323fu/README.md#已知限制).
+Feature availability varies by device; see the device pages below for details.
+This repository maintains adaptation sources and patches. Tablet installation
+images and OTA integration are still in development.
+
+## Device support
+
+Current device work covers Lenovo Legion Y700 Gen 4 and Gen 5. Both share a Linux
+**7.2.6** kernel, with separate device trees and hardware configuration.
+
+| Device | Model / SoC | Main confirmed features | Details |
+|---|---|---|---|
+| Lenovo Legion Y700 Gen 4 | TB322FC / SM8750 | Android and internal Linux boot, Steam Gaming Mode, touch input, G9 controls and RGB | [Gen 4 status](devices/lenovo-tb322fc/README.md) |
+| Lenovo Legion Tab Gen 5 / Y700 Gen 5 | TB323FU / SM8850P | Steam Gaming Mode, 165 Hz display, G9 2026 controls and RGB | [Gen 5 status](devices/lenovo-tb323fu/README.md) |
+
+Gen 4 includes fixes for touch coordinates and display recovery when restarting
+the Steam session. Charging, dual-USB behavior, updates, and remaining work are
+listed in the [Gen 4 known issues](devices/lenovo-tb322fc/README.md#已知问题与待完成项).
+Boot images remain model-specific and must not be cross-flashed.
 
 ## kShimC multi-boot
 
@@ -92,25 +101,25 @@ preview, not a photograph of the tablet.*
 
 </details>
 
-Menu sources and build inputs are under
+The repository's menu sources and Gen 5 build inputs are under
 [`devices/lenovo-tb323fu/boot/`](devices/lenovo-tb323fu/boot/).
 See the [build recipe](devices/lenovo-tb323fu/boot/star-chart-build/README.md)
-for pinned dependencies and device-specific payload requirements. Advanced boot
-actions have not all been individually validated on hardware.
+for pinned dependencies. See each device page for available boot entries;
+advanced boot actions have not all been individually validated on hardware.
 
 ## Documentation
 
 | I want to… | Guide |
 |---|---|
-| Check tablet support and known issues | [TB323FU device documentation](devices/lenovo-tb323fu/README.md) |
-| Inspect the boot build | [kShimC build recipe](devices/lenovo-tb323fu/boot/star-chart-build/README.md) |
-| Check component origins and versions | [Sources and provenance](devices/lenovo-tb323fu/docs/SOURCES.md) |
+| Check Gen 4 support and known issues | [Y700 Gen 4 (TB322FC)](devices/lenovo-tb322fc/README.md) |
+| Check Gen 5 support and known issues | [Y700 Gen 5 (TB323FU)](devices/lenovo-tb323fu/README.md) |
+| Inspect the boot build | [kShimC Gen 5 build recipe](devices/lenovo-tb323fu/boot/star-chart-build/README.md) |
+| Check component origins and versions | [Gen 4 sources](devices/lenovo-tb322fc/README.md#源码与来源) · [Gen 5 sources](devices/lenovo-tb323fu/docs/SOURCES.md) |
 | Learn the upstream system | [Using ArmadaOS](https://armadaos.dev/using-armada/) |
 | Report a tablet-branch issue | [Freedom issues](https://github.com/mydanyi/armadaos-freedom/issues) |
 
 Upstream installation instructions describe upstream-supported devices. Use the
-model-specific documentation here for the tablet boot path; do not treat a
-generic upstream image or bootloader package as a TB323FU installation package.
+model-specific documentation here for tablet installation and boot.
 
 ## Development
 
@@ -135,16 +144,13 @@ build outputs are kept outside the repository.
 
 - System foundation: [ArmadaOS](https://github.com/armada-os/armada), built on
   [Fedora bootc](https://github.com/bootc-dev/bootc).
-- Boot menu: [kShimC](https://github.com/sunflower2333/kShimC/tree/feature/2610),
-  with [CrDK](https://github.com/Project-Aloha/CrDK) and
-  [DualBootKernelPatcher](https://github.com/Project-Aloha/DualBootKernelPatcher/tree/feature/2610).
-- TB323FU board support: [tb323fu-linux](https://github.com/joonhoekim/tb323fu-linux),
-  with this branch's device patches.
+- Boot menu: [kShimC](https://github.com/sunflower2333/kShimC/tree/feature/2610).
 - Armada logo: [Rax](https://github.com/Raxcoms).
 
-See the [upstream credits](https://armadaos.dev/project/credits/) and our
-[component sources](devices/lenovo-tb323fu/docs/SOURCES.md) for contributors and
-pinned versions. Individual components retain their source attribution and licenses.
+See the [upstream credits](https://armadaos.dev/project/credits/) for more
+contributors and the [device documentation](#device-support) for component
+origins and pinned versions. Individual components retain their source
+attribution and licenses.
 
 ## License
 
