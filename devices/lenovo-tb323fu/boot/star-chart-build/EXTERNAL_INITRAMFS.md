@@ -1,8 +1,8 @@
-# 外置 initramfs 构建（五代统一内核）
+# Y700 五代外置 initramfs 构建
 
 `build_external_initramfs.py` 在 Linux Docker 中离线重建五代统一内核使用的外置 initramfs。输入是内置 initramfs（gzip 压缩的 newc cpio，此处作为外置模板）和统一内核的模块暂存目录；模板对 `/lib/modules` 以外的一切内容具有权威性。
 
-本文件是外置 initramfs 的独立说明；共享的构建配方见 `README.md`。
+本页适用于 TB323FU，构建与打包入口见[五代引导说明](README.md)。该工具保留模板内的启动逻辑和固件，并要求五代所用的 `nt36536_ts.ko`；不能因两代共用内核，就把同一模板直接用于四代。四代输入约定见[四代引导说明](../../../lenovo-tb322fc/boot/README.md)。
 
 ## 输入与命令
 
@@ -36,7 +36,7 @@ python3 -B build_external_initramfs.py \
 - `/lib/modules` 以外的一切内容（`init`、`armada-root-resolve`、辅助程序、固件和字体）原样保留：打包前后核对 SHA-256、权限、符号链接目标和设备号；`init` 与根解析策略由模板决定，本脚本不修改。
 - `/lib/modules` 整体替换为唯一的 `<KVER>.sqfs`，不保留模板中的旧模块树。
 
-## 模块策略（未改变）
+## 模块策略
 
 - 旧 `init` 只解析未压缩 `.ko`：发现 `.ko.xz`、`.ko.zst`、`.ko.gz` 直接报错，不改变模块加载策略。
 - `qcom_q6v5_pas.ko` 和 `nt36536_ts.ko` 必须存在。

@@ -46,8 +46,8 @@ Highlights of the current adaptation:
 - A shared kernel build with device-specific device trees, drivers, and hardware
   configuration.
 - kShimC multi-boot with separate internal-storage and TF-card Linux entries.
-- Device-matched 30 / 60 / 90 / 120 / 165 Hz display modes.
-- Dual-USB routing, audio, 5 GHz Wi-Fi, battery and temperature reporting.
+- Device-specific display modes, touch, power, audio, and network configuration.
+- Dual-USB support, plus battery and temperature reporting.
 - Tablet touch input, plus G9 / G9 2026 controller mapping, RGB control, and
   double-Home quick access.
 - Tablet-aware Armada Control, including hiding fan controls on fanless devices.
@@ -61,14 +61,11 @@ images and OTA integration are still in development.
 Current device work covers Lenovo Legion Y700 Gen 4 and Gen 5. Both share a Linux
 **7.2.6** kernel, with separate device trees and hardware configuration.
 
-| Device | Model / SoC | Main confirmed features | Details |
+| Device | Model / SoC | Documentation | Known issues |
 |---|---|---|---|
-| Lenovo Legion Y700 Gen 4 | TB322FC / SM8750 | Android and internal Linux boot, Steam Gaming Mode, touch input, G9 controls and RGB | [Gen 4 status](devices/lenovo-tb322fc/README.md) |
-| Lenovo Legion Tab Gen 5 / Y700 Gen 5 | TB323FU / SM8850P | Steam Gaming Mode, 165 Hz display, G9 2026 controls and RGB | [Gen 5 status](devices/lenovo-tb323fu/README.md) |
+| Lenovo Legion Y700 Gen 4 | TB322FC / SM8750 | [Gen 4 documentation](devices/lenovo-tb322fc/README.md) | [Gen 4 known issues](devices/lenovo-tb322fc/README.md#已知问题与待完成项) |
+| Lenovo Legion Tab Gen 5 / Y700 Gen 5 | TB323FU / SM8850P | [Gen 5 documentation](devices/lenovo-tb323fu/README.md) | [Gen 5 known issues](devices/lenovo-tb323fu/README.md#已知限制) |
 
-Gen 4 includes fixes for touch coordinates and display recovery when restarting
-the Steam session. Charging, dual-USB behavior, updates, and remaining work are
-listed in the [Gen 4 known issues](devices/lenovo-tb322fc/README.md#已知问题与待完成项).
 Boot images remain model-specific and must not be cross-flashed.
 
 ## kShimC multi-boot
@@ -80,12 +77,11 @@ Android boot image. It keeps the factory boot chain and presents a menu for:
 - ArmadaOS installed in internal storage.
 - ArmadaOS installed on a TF / microSD card.
 - Advanced boot: Linux diagnostics, Recovery, Fastboot, and 9008 / EDL.
-- Language selection, restart, and shutdown.
+- Settings, device information, language selection, restart, and shutdown.
 
 The Linux kernel and device tree are boot payloads; Linux then mounts the root
 filesystem selected by the internal-storage or TF-card entry. These are two
-separate installation targets. The menu does not imply direct SD/UFS filesystem
-support in kShimC.
+separate installation targets. See each device page for available boot entries.
 
 <p align="center">
   <img src=".github/assets/kshimc-star-chart-en.png" alt="KShimC launcher — STAR_CHART theme, English menu" width="100%">
@@ -94,26 +90,18 @@ support in kShimC.
 *STAR_CHART menu rendered from the current implementation; this is a software
 preview, not a photograph of the tablet.*
 
-<details>
-<summary>Simplified Chinese menu preview</summary>
-
-![KShimC launcher — Simplified Chinese menu](.github/assets/kshimc-star-chart-zh.png)
-
-</details>
-
-The repository's menu sources and Gen 5 build inputs are under
-[`devices/lenovo-tb323fu/boot/`](devices/lenovo-tb323fu/boot/).
-See the [build recipe](devices/lenovo-tb323fu/boot/star-chart-build/README.md)
-for pinned dependencies. See each device page for available boot entries;
-advanced boot actions have not all been individually validated on hardware.
+Both generations share the [kShimC launcher sources](devices/lenovo-tb323fu/boot/kshim-success-source/README.md),
+with separate device profiles and boot payloads. See the
+[Gen 4 boot guide](devices/lenovo-tb322fc/boot/README.md) and
+[Gen 5 boot guide](devices/lenovo-tb323fu/boot/star-chart-build/README.md)
+for their build paths.
 
 ## Documentation
 
 | I want to… | Guide |
 |---|---|
-| Check Gen 4 support and known issues | [Y700 Gen 4 (TB322FC)](devices/lenovo-tb322fc/README.md) |
-| Check Gen 5 support and known issues | [Y700 Gen 5 (TB323FU)](devices/lenovo-tb323fu/README.md) |
-| Inspect the boot build | [kShimC Gen 5 build recipe](devices/lenovo-tb323fu/boot/star-chart-build/README.md) |
+| Build a boot image | [Gen 4 boot guide](devices/lenovo-tb322fc/boot/README.md) · [Gen 5 boot guide](devices/lenovo-tb323fu/boot/star-chart-build/README.md) |
+| Inspect the installed boot tools | [kShimC packaging tools](packages/kshim-tools/README.md) |
 | Check component origins and versions | [Gen 4 sources](devices/lenovo-tb322fc/README.md#源码与来源) · [Gen 5 sources](devices/lenovo-tb323fu/docs/SOURCES.md) |
 | Learn the upstream system | [Using ArmadaOS](https://armadaos.dev/using-armada/) |
 | Report a tablet-branch issue | [Freedom issues](https://github.com/mydanyi/armadaos-freedom/issues) |
@@ -123,10 +111,11 @@ model-specific documentation here for tablet installation and boot.
 
 ## Development
 
-The repository retains the upstream bootc image and package build foundation,
-plus tablet sources and overlays under [`devices/`](devices/). These overlays
-are not all integrated into the generic image recipes yet. Package development
-is documented in [`packages/`](packages/README.md); upstream recipes use
+System images use ArmadaOS's bootc build foundation. The shared kernel lives in
+[`packages/kernel/`](packages/kernel/), hardware profiles in
+[`system_files/usr/lib/armada/devices/`](system_files/usr/lib/armada/devices/),
+and device-specific resources and boot guides in [`devices/`](devices/).
+Package development is documented in [`packages/`](packages/README.md). Recipes use
 [just](https://just.systems/) and [Podman](https://podman.io/):
 
 ```console
@@ -136,9 +125,9 @@ $ just build     # Build the bootc container; not a ready-to-flash tablet image
 $ just --list    # List development recipes
 ```
 
-For device work, follow the relevant overlay/build instructions and preserve
-model-based matching. Reports, device logs, credentials, backups, and local
-build outputs are kept outside the repository.
+Follow the configuration and build guide for the target device. System updates
+use Freedom's own repository; see each device page for boot synchronization
+and OTA support status.
 
 ## Credits
 

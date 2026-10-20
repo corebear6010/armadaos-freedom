@@ -113,7 +113,8 @@ and modified I2C target/driver. The optional LT9611 extension is outside this
 patch set; its upstream runner option requires that separate driver extension.
 EDK2 headers are an explicit test input, not a firmware-build dependency.
 
-Host models and UEFI syntax checks do not prove a full UEFI/WDK build,
-electrical behavior, display scanout, touch input or hardware handoff. See the
-root README for QEMU and board image packaging commands and the migration
-validation report for the checks actually completed.
+Host models and UEFI syntax checks cover the integration contract. QEMU and
+board packaging commands are in the [runtime README](../../README.md);
+Y700 display, input and boot status are recorded separately in the
+[Gen 4](../../../../../lenovo-tb322fc/README.md) and
+[Gen 5](../../../../README.md) device documentation.

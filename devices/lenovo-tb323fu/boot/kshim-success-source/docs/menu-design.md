@@ -1,5 +1,10 @@
 # Non-FLAT boot menu design adaptation
 
+This document records the earlier 25-preset design layer. Its preset counts
+and validation matrix describe that development stage. Current choices live
+in `src/Kconfig` and `src/ui/styles/`; the Y700 profiles use STAR_CHART as
+described in the [Y700 menu guide](tb323fu-boot-menu.md).
+
 This branch implements a presentation layer on the existing LVGL menu. It is not
 an import of UIKit, Material, Fluent, HarmonyOS or Clover toolkits, and passing
 host tests is not a claim of official design conformance or hardware acceptance.
@@ -13,7 +18,7 @@ descriptor and keeps its original geometry, fonts, animation and texture path.
 The shared entry array, 49-entry limit, physical key order, pointer cancellation,
 Boot-only touch confirmation, countdown and teardown remain in `lvgl_port.c`.
 
-The original `feature/2610` branch is not replaced or automatically merged.
+The source snapshot preserves these design descriptors alongside later themes.
 
 ## Theme identities
 

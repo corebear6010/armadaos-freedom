@@ -1,4 +1,6 @@
-# 组件来源与固定版本
+# Y700 五代组件来源与固定版本
+
+本页记录 TB323FU 的板级来源，以及四代、五代共用的启动器依赖。四代板级 DTS 的来源另见[四代源码与来源](../../lenovo-tb322fc/README.md#源码与来源)。当前内核统一从 `packages/kernel/` 构建，下面的旧内核快照用于保留移植来源。
 
 ## 系统和板级内核
 
@@ -16,7 +18,7 @@
 
 引导基于 [sunflower2333/kShimC feature/2610](https://github.com/sunflower2333/kShimC/tree/feature/2610)，打包器基于 [Project-Aloha/DualBootKernelPatcher feature/2610](https://github.com/Project-Aloha/DualBootKernelPatcher/tree/feature/2610)。
 
-`boot/kshim-success-source/` 保存 STAR_CHART 菜单的非依赖源码快照，`.config` 为 runtime 配置。原源码归档 SHA-256 为 `3f8dc6d08e3945c874d8f1ab0789917db9781f62f77db98fecec547c6b9b1c5e`；文本在 Git 中统一为 LF，此哈希不用于比较重新生成的 Git 归档。
+[`boot/kshim-success-source/`](../boot/kshim-success-source/README.md) 保存两代共用的 STAR_CHART 菜单源码。四代使用 `configs/tb322fc_android_defconfig`，五代统一内核使用 `configs/tb323fu_unified_defconfig`；构建时显式选择配置，不能把快照内的 `.config` 当作两代通用配置。原源码归档 SHA-256 为 `3f8dc6d08e3945c874d8f1ab0789917db9781f62f77db98fecec547c6b9b1c5e`；文本在 Git 中统一为 LF，此哈希不用于比较重新生成的 Git 归档。
 
 | 依赖 | 固定版本 |
 |---|---|
@@ -26,7 +28,7 @@
 | 打包器上游基线 | `2276163d066596cb0750e76cbfeec5c193b1779f` |
 | 打包器本地基线 | `aa819b0d1be76e83256f64cf77c0f6dfe4174eea`，另需 `patches/boot/` 中的共享 PayloadFrom 修改 |
 
-CrDK 需要 `ports/crdk/` 的补丁层。源码归档不包含顶层 `lib/`、`third_party/`、`.git/`；`lib/libfdt` 和 `libfdt_env.h` 也需单独准备，现有 `.gitmodules` 不足以自动还原全部依赖。详见 [构建配方](../boot/star-chart-build/README.md)。
+CrDK 需要 `ports/crdk/` 的补丁层。源码归档不包含顶层 `lib/`、`third_party/`、`.git/`；`lib/libfdt` 和 `libfdt_env.h` 也需单独准备，现有 `.gitmodules` 不足以自动还原全部依赖。对应入口见[四代引导说明](../../lenovo-tb322fc/boot/README.md)和[五代引导说明](../boot/star-chart-build/README.md)，系统内工具来源见 [kshim-tools](../../../packages/kshim-tools/README.md)。
 
 `patches/boot/kshim-local-commits.mbox` 是旧阶段的增量记录，不是当前 STAR 快照的完整补丁集，不能无条件重复应用。Android payload、原厂 boot、分区备份及构建生成的镜像不随仓库分发。
 

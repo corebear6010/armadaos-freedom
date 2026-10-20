@@ -1,33 +1,69 @@
-# Lenovo Legion Tab Gen 5 / Y700（TB323FU）
+# 联想拯救者 Y700 五代
 
-这是 ArmadaOS 的 TB323FU / SM8850P 平板适配目录。上游项目为 [armada-os/armada](https://github.com/armada-os/armada)，组件来源和固定版本见 [SOURCES.md](docs/SOURCES.md)。
+ArmadaOS Freedom 为 Y700 五代提供 kShimC 多系统启动、Steam 游戏模式和面向平板的显示、输入与外设支持。本页记录 TB323FU 的功能状态、已知问题和开发入口。
 
-本仓库维护源码与补丁，尚不提供完整、可重复构建并通过整机验收的 Y700 镜像。部分设备文件仍是独立 overlay，需要按目录说明集成；不能直接把上游通用镜像当作本机安装包。
+| 项目 | 配置 |
+|---|---|
+| 型号 | TB323FU |
+| SoC | Qualcomm SM8850P；驱动配置使用 SM8850 |
+| 设备树标识 | `lenovo,baldur`、`qcom,kaanapali` |
+| 内核 | ArmadaOS Freedom 统一 Linux 7.2.6 |
+| Armada Control 配置 | `lenovo-tb323fu`，无风扇平板 |
 
-## 目录
+## 功能状态
 
-- `boot/`：kShimC 源码、quiet 温区 GPU 解绑设备树片段，以及 [STAR_CHART 构建配方](boot/star-chart-build/README.md)。
-- [`../../packages/kernel/`](../../packages/kernel/)：当前统一 Linux **7.2.6** 内核、Baldur 设备树、驱动补丁和配套模块构建入口，与 Y700 四代共用基础内核。
-- `kernel/`：历史 7.3 板级源码快照和 `runtime-fixes/` 参考补丁，用于保留来源；当前统一内核所需的回移已接入 `packages/kernel`。
-- `rootfs/`：双 USB、音频、Wi-Fi 等设备配置。扬声器配置见 [部署说明](docs/audio-deployment.md)。
-- `patches/boot/`：引导及打包器补丁。旧 kShimC 邮箱补丁用于来源追溯，不应重复叠加到当前源码快照。
-- `diagnostics/`、`tests/`：诊断工具和回归测试源码。运行生成的报告、设备日志及备份在仓库外保存。
+| 功能 | 当前状态 |
+|---|---|
+| 机身 Linux | 统一 Linux 7.2.6 已启动到 Steam，原生 DRM／Adreno 840 显示已运行 |
+| 内屏显示 | 30／60／90／120／165 Hz 档位按机型匹配，真实 165 Hz 时序已接入 |
+| kShimC 启动菜单 | STAR_CHART 中英文菜单，提供 Android、机身／TF 卡 Linux、设置和高级启动入口 |
+| 输入与性能配置 | 已接入设备识别、CPU 拓扑、性能配置及桌面触摸校准 |
+| 音频与网络 | 已有扬声器保护、双 USB 路由和 5 GHz Wi-Fi 扫描适配 |
+| 状态显示 | 已接入 MangoHud 电池和温度采集 |
+| G9 2026 | 基础按键、单按／双击 Home 及 RGB 控制已确认正常 |
+| Armada Control | 使用五代独立配置，无风扇设备隐藏风扇相关入口 |
 
-## 已接入的功能
+统一内核已确认机身启动及实体显示；触屏、游戏、TF 卡启动和长期显示稳定性仍需继续复测。高级启动中的操作尚未全部完成逐项验证。
 
-- 统一 Linux 7.2.6 #5 已在机身系统启动到 Steam，原生 DRM／Adreno 840 和 165 Hz 显示已运行，用户确认实体画面恢复。触控、游戏、TF 启动及长期显示稳定性仍需继续验证。
-- 设备识别、CPU 拓扑、性能配置和桌面触摸校准。
-- 机型匹配的 30／60／90／120／165 Hz 档位、真实 165 Hz 面板时序和高像素时钟 EDID 修复；旧内核仍可回退到其实际公布的 164 Hz。
-- kShimC 中英文 STAR_CHART 菜单：Android、机身 ArmadaOS、TF 卡 ArmadaOS、高级启动、语言、重启和关机。高级启动包含 Linux 诊断、Recovery、Fastboot、9008；并非所有高级动作均已逐项验收。
-- 双 USB 路由、扬声器保护、5 GHz Wi-Fi 扫描，以及 MangoHud 电池和温度采集。
-- G9 2026 基础按键和 RGB 开关、颜色、亮度。匹配 TB323FU 设备型号和 USB `3537:1136`；其他 G9 型号不套用此配置。
-- `armada-g9-double-home.service` 被动监听 G9 主输入及同一设备的 Consumer Control 接口：双击 Home 打开右侧快捷菜单，单按保留 Steam 原行为。依赖现有 InputPlumber 共享输入支持；其他型号不启动监听。
-- Armada Control 通过实际风扇控制能力决定是否显示风扇页、风扇曲线和充电风扇设置。
+## G9 手柄
+
+五代适配 G9 2026（USB `3537:1136`）：
+
+- 基础按键可正常操作。
+- 单按 Home 保留 Steam 原菜单，双击 Home 打开右侧快捷菜单。
+- 在 Armada Control 的 RGB 页面控制灯光开关、颜色和亮度。
+
+按键映射、RGB 和双击辅助程序同时匹配平板型号与手柄 ID，与[四代旧 G9](../lenovo-tb322fc/README.md#g9-手柄)分开维护。双击辅助程序使用 InputPlumber 的共享输入支持，监听主输入及同一设备的 Consumer Control 接口。
 
 ## 已知限制
 
-90 Hz 偶发物理花屏、Steam 主界面低帧、复杂场景帧时间波动，以及游戏期间死机／自动重启仍未完全解决。SGSR 高刷问题与面板时序、补帧是不同链路，不应混为同一项修复。
+- **显示与游戏稳定性：** 90 Hz 偶发物理花屏、Steam 主界面低帧、复杂场景帧时间波动，以及游戏期间死机／自动重启仍需继续排查。SGSR 高刷、面板时序和补帧分别跟踪。
+- **安装与更新：** 公共安装及五代引导同步尚待完成完整验证，不能直接使用四代的引导打包／同步流程。
+- **充电设置：** 硬件充电固件可能沿用 Android 的充电上限，Linux 调整入口尚未接入。
+- **启动器设置：** 机型选择和默认启动项仅在本次启动内生效，持久化暂缓。
+- **手柄扩展功能：** 全部背键、IMU、震动、多模式和插拔／休眠后的 RGB 恢复尚未完整验证。
 
-设备 overlay、内核及引导的完整镜像构建和 OTA 集成仍待完成。G9 的全部背键、IMU、震动、多模式和插拔／休眠后的 RGB 恢复尚未完整验证。硬件充电固件可能沿用 Android 的充电上限，Linux 调整入口尚未接入。
+## 内核与启动
+
+五代与[四代](../lenovo-tb322fc/README.md)共用 [`packages/kernel/`](../../packages/kernel/) 中的 Linux 7.2.6 基础内核和 Freedom 补丁集，五代使用 Baldur 设备树、对应驱动补丁与功放模块。旧 7.3 板级源码保留为移植来源，当前构建入口是统一内核目录。
+
+引导构建见[五代引导说明](boot/star-chart-build/README.md)，外置 initramfs 见[配套说明](boot/star-chart-build/EXTERNAL_INITRAMFS.md)。统一内核使用 `tb323fu_unified_defconfig` 启动器配置和五代专用启动载荷；**两代 boot 镜像不能互刷**。
+
+系统更新目标为 Freedom 的 `ghcr.io/mydanyi/armadaos-freedom`，支持 `stable`、`beta`、`testing` 渠道。现有 `armada-kshim-sync` 按四代 Elden 匹配，不能将它当作五代已完成的 OTA 支持。
+
+## 源码与来源
+
+| 入口 | 内容 |
+|---|---|
+| [设备配置](../../system_files/usr/lib/armada/devices/lenovo-tb323fu.conf) | 机型识别与显示旋转配置 |
+| [统一内核](../../packages/kernel/) | 当前内核、设备树、驱动补丁及模块构建 |
+| [启动器源码](boot/kshim-success-source/README.md) | 四代与五代共用的 kShimC 源码快照 |
+| [引导构建](boot/star-chart-build/README.md) | 五代启动载荷与打包约定 |
+| [设备系统文件](rootfs/) | 双 USB、音频、Wi-Fi 等设备专用资源 |
+| [扬声器部署](docs/audio-deployment.md) | DSP 保护和功放增益服务 |
+| [165 Hz 补丁说明](kernel/runtime-fixes/165hz.md) | 旧内核参考补丁及统一内核对应入口 |
+| [组件来源](docs/SOURCES.md) | 上游来源、固定版本与许可记录 |
+
+`kernel/` 保存历史板级源码，`patches/boot/` 保存引导及打包器的来源补丁。历史补丁不能重复叠加到当前统一内核或启动器源码。`diagnostics/` 和 `tests/` 提供诊断与回归工具。
 
 小黄鸭插件在独立仓库维护，不包含在本目录。保留上游及各组件的许可证、字体授权和来源记录。

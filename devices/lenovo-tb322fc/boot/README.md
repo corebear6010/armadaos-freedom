@@ -1,18 +1,19 @@
-# TB322FC Android 引导打包（Android-only kShim）
+# Y700 四代引导构建与打包
 
-本目录只包含 TB322FC 的 Android-only 打包驱动与说明。它把 4 MiB 的 Manifest
-runtime 作为 Attached Shim，与一张原厂 Android 镜像组合成单基座（base-only）布局，
-并用现有 v4 内核替换器与官方 avbtool 生成离线校验产物。
+适用于 TB322FC / SM8750。四代和五代共用 [kShimC 源码](../../lenovo-tb323fu/boot/kshim-success-source/README.md)，使用各自的机型配置、原厂 Android 输入和设备树。
 
-范围仅限“原厂 Android + 自动附加 Shim”这一条路径：**不包含** Linux、
-自定义 DTB 或 initrd 分支，也不做 gzip，全程输入/内嵌内核均为未压缩的
-raw ARM64 Image。本目录的驱动不打包 Linux；已安装系统中的共享 Linux 打包器是
-`system_files/usr/libexec/armada/kshim-build-boot.py`，两者互不替代。
+| 用途 | 构建入口 |
+|---|---|
+| 原厂 Android + kShimC 菜单 | 本目录的 [build_android_boot.py](build_android_boot.py) |
+| Linux 诊断环境或已安装的机身 Linux | [kshim-build-boot.py](../../../system_files/usr/libexec/armada/kshim-build-boot.py) |
+| 系统内打包依赖 | [kshim-tools](../../../packages/kshim-tools/README.md) |
+
+第一条路径只打包原厂 Android 基座，不包含 Linux、DTB 或 initramfs；第二条路径才负责四代 Linux 启动载荷。两条路径都使用 4 MiB 的 kShimC runtime。当前功能状态见[四代设备文档](../README.md)。
 
 ## 构建 4 MiB runtime
 
-runtime 由 kShim 源码树构建（`K = devices/lenovo-tb323fu/boot/kshim-success-source`），
-使用独立的 TB322FC profile（继承 TB323FU UI，但按下方列表裁剪菜单项）：
+runtime 由共享源码树构建（`K = devices/lenovo-tb323fu/boot/kshim-success-source`），
+使用独立的 `tb322fc_android_defconfig`。配置名中的 `android` 不限制它只能显示 Android；Linux 条目由打包时的 manifest 提供。
 
 ```sh
 # 在 K 源码树根目录
@@ -28,7 +29,7 @@ KSHIM_MENU_SESSION_SETTINGS、KSHIM_QCOM_REBOOT。显式关闭：
 KSHIM_QEMU_PLATFORM、KSHIM_TOUCH、KSHIM_SMP、KSHIM_UEFI_TEST_MENU、banner、
 KSHIM_DEBUG_CONSOLE 与 KSHIM_BOOT_TIMING。设备信息为共享实现，无需新增选项。
 
-## 打包 CLI
+## 原厂 Android 基座打包
 
 runtime 构建、测试与打包在 Linux Docker 构建环境中执行；脚本本身不访问设备、不联网。
 打包使用本目录的独立驱动（默认复用同级 TB323FU 的
@@ -48,7 +49,7 @@ python3 <repo>/devices/lenovo-tb322fc/boot/build_android_boot.py \
 
 `--source-label` 仅作记录用途。
 
-## 输入约束
+### 输入约束
 
 - `--stock-boot` 必须是 96 MiB（100663296 字节）、魔数 `ANDROID!`、header
   版本 4、header_size 1584、ramdisk_size 0、signature_size 0，且带 AVB footer。
@@ -58,10 +59,27 @@ python3 <repo>/devices/lenovo-tb322fc/boot/build_android_boot.py \
   非 `UNCOMPRESSED_IMG`、且不是 gzip。
 - `--runtime` 必须恰好 4 MiB。
 
-## 菜单与校验边界
+### 菜单与校验
 
 菜单为 Android 基座（默认项）+ 设备信息 + 语言切换/中文 + 按键操作；电源、
 高级与会话设置项已启用，调试串口、触屏与 SMP 已关闭。
 
 离线检查覆盖 Manifest ABI 校验、字节级往返与 avbtool 校验。校验用的 AVB
 元数据是**未签名**的，需要解锁 bootloader，无法保留原厂 Lenovo 签名。
+
+## Linux 启动载荷打包
+
+[`kshim-build-boot.py`](../../../system_files/usr/libexec/armada/kshim-build-boot.py) 目前只接受四代 `lenovo,elden` / `qcom,sm8750` 设备树，不适用于五代 Baldur。它提供两种布局：
+
+| 布局 | 输入 | 默认启动项 |
+|---|---|---|
+| `--layout maintenance` | 显式提供 `--linux-image`、`--dtb`、`--initrd` 和 `--bootargs` | Android；可用 `--default-entry maintenance` 选择诊断环境 |
+| `--layout installed` | 提供 `--installer-result` 与 `--boot-dir`，从安装结果选择内核、DTB 和 initramfs | 机身 Linux；可用 `--default-entry android` 改为 Android |
+
+两种布局都需提供 `--stock-boot`、`--runtime`、`--packer`、`--unpacker`、`--repacker`、`--avbtool` 和独立的 `--out` 输出目录。`installed` 布局不能再手工传入另一组内核、DTB、initramfs 或命令行。
+
+维护布局包含原厂 Android 和 Linux 诊断入口；安装布局增加机身 Linux，并让诊断入口共享同一份 Linux 内核、使用单独的 DTB。两者都不是五代的 TF 卡／机身八或九条目布局。打包过程校验布局、解包往返和 boot 封装，不执行刷写或重启。
+
+## 更新衔接
+
+系统内的 [`armada-kshim-prepare`](../../../system_files/usr/libexec/armada/armada-kshim-prepare) 负责从已部署系统准备输入，[`armada-kshim-sync`](../../../system_files/usr/libexec/armada/armada-kshim-sync) 负责调度打包、写入与回读。当前实现按四代设备树匹配，完整 OTA 流程仍待验证；本页的离线打包命令不替代该流程。

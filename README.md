@@ -44,8 +44,8 @@ ArmadaOS Freedom 是基于 [ArmadaOS](https://github.com/armada-os/armada)、由
 - Steam 游戏模式与 KDE Plasma 桌面，沿用 ArmadaOS 的 FEX 和 Proton 支持。
 - 统一内核构建，按机型加载设备树、驱动和硬件配置。
 - kShimC 多系统启动，可分别选择机身存储和 TF 卡中的 Linux 系统。
-- 按设备型号匹配的 30／60／90／120／165 Hz 显示档位。
-- 双 USB 路由、音频、5 GHz Wi-Fi，以及电池和温度数据采集。
+- 按设备型号匹配的显示档位、触屏、电源、音频与网络配置。
+- 双 USB 端口适配，以及电池和温度数据采集。
 - 平板触屏输入，以及 G9／G9 2026 手柄按键映射、RGB 控制和双击 Home 打开右侧快捷菜单。
 - 面向平板的 Armada Control 适配，包括在无风扇设备上隐藏风扇控制。
 
@@ -55,12 +55,12 @@ ArmadaOS Freedom 是基于 [ArmadaOS](https://github.com/armada-os/armada)、由
 
 目前适配联想拯救者 Y700 四代与五代，两代共用 Linux **7.2.6** 内核，并分别维护设备树和硬件配置。
 
-| 设备 | 型号 / SoC | 已确认的主要功能 | 详细状态 |
+| 设备 | 型号 / SoC | 设备文档 | 已知问题 |
 |---|---|---|---|
-| 联想拯救者 Y700 四代 | TB322FC / SM8750 | Android 与机身 Linux 启动、Steam 游戏模式、触屏、G9 按键与 RGB | [四代设备文档](devices/lenovo-tb322fc/README.md) |
-| 联想拯救者 Y700 五代 / Legion Tab Gen 5 | TB323FU / SM8850P | Steam 游戏模式、165 Hz 显示、G9 2026 按键与 RGB | [五代设备文档](devices/lenovo-tb323fu/README.md) |
+| 联想拯救者 Y700 四代 | TB322FC / SM8750 | [四代设备文档](devices/lenovo-tb322fc/README.md) | [四代已知问题](devices/lenovo-tb322fc/README.md#已知问题与待完成项) |
+| 联想拯救者 Y700 五代 | TB323FU / SM8850P | [五代设备文档](devices/lenovo-tb323fu/README.md) | [五代已知问题](devices/lenovo-tb323fu/README.md#已知限制) |
 
-四代已修正触屏坐标和 Steam 会话重开后的显示问题；充电、双 USB、更新流程等后续工作见[四代已知问题](devices/lenovo-tb322fc/README.md#已知问题与待完成项)。两代的启动镜像仍需匹配各自设备，不能直接互刷。
+两代的启动镜像仍需匹配各自设备，不能直接互刷。
 
 ## kShimC 多系统启动
 
@@ -70,9 +70,9 @@ ArmadaOS Freedom 是基于 [ArmadaOS](https://github.com/armada-os/armada)、由
 - 启动安装在机身存储中的 ArmadaOS。
 - 启动安装在 TF／microSD 卡中的 ArmadaOS。
 - 高级启动模式：Linux 诊断、Recovery 恢复模式、Fastboot 和 9008／EDL。
-- 切换语言、重启和关机。
+- 设置、设备信息、语言选择、重启和关机。
 
-Linux 内核和设备树随 boot 镜像打包；内核启动后，再根据所选条目挂载机身或 TF 卡上的根文件系统。机身安装和 TF 卡安装是两个独立目标，这不表示 kShimC 本身已经具备直接读取 SD／UFS 文件系统的能力。
+Linux 内核和设备树随 boot 镜像打包；内核启动后，根据所选条目挂载机身或 TF 卡上的根文件系统。机身安装和 TF 卡安装是两个独立目标，入口的可用范围见各机型文档。
 
 <p align="center">
   <img src=".github/assets/kshimc-star-chart-zh.png" alt="KShimC 启动器：STAR_CHART 主题简体中文菜单" width="100%">
@@ -80,22 +80,14 @@ Linux 内核和设备树随 boot 镜像打包；内核启动后，再根据所�
 
 *上图为当前实现生成的 STAR_CHART 菜单渲染预览，非平板实拍。*
 
-<details>
-<summary>查看英文菜单预览</summary>
-
-![KShimC 启动器：英文菜单](.github/assets/kshimc-star-chart-en.png)
-
-</details>
-
-仓库中的菜单源码与五代构建输入位于 [`devices/lenovo-tb323fu/boot/`](devices/lenovo-tb323fu/boot/)，固定依赖见[构建说明](devices/lenovo-tb323fu/boot/star-chart-build/README.md)。各机型的入口可用性以设备文档为准，高级启动中的操作尚未全部完成逐项真机验收。
+两代共用 [kShimC 启动器源码](devices/lenovo-tb323fu/boot/kshim-success-source/README.md)，分别选择对应的机型配置和启动载荷。构建入口见[四代引导说明](devices/lenovo-tb322fc/boot/README.md)与[五代引导说明](devices/lenovo-tb323fu/boot/star-chart-build/README.md)。
 
 ## 文档导航
 
 | 我想了解…… | 对应文档 |
 |---|---|
-| 四代支持情况与已知问题 | [Y700 四代（TB322FC）](devices/lenovo-tb322fc/README.md) |
-| 五代支持情况与已知问题 | [Y700 五代（TB323FU）](devices/lenovo-tb323fu/README.md) |
-| 如何构建启动镜像 | [kShimC 五代构建说明](devices/lenovo-tb323fu/boot/star-chart-build/README.md) |
+| 如何构建启动镜像 | [四代引导说明](devices/lenovo-tb322fc/boot/README.md) · [五代引导说明](devices/lenovo-tb323fu/boot/star-chart-build/README.md) |
+| 系统内使用哪些引导工具 | [kShimC 打包工具](packages/kshim-tools/README.md) |
 | 组件来源与固定版本 | [四代源码与来源](devices/lenovo-tb322fc/README.md#源码与来源) · [五代来源记录](devices/lenovo-tb323fu/docs/SOURCES.md) |
 | 上游系统如何使用 | [ArmadaOS 使用文档](https://armadaos.dev/using-armada/) |
 | 反馈本分支的问题 | [Freedom 问题反馈](https://github.com/mydanyi/armadaos-freedom/issues) |
@@ -104,7 +96,7 @@ Linux 内核和设备树随 boot 镜像打包；内核启动后，再根据所�
 
 ## 开发与构建
 
-本仓库保留上游的 bootc 镜像和软件包构建基础，并在 [`devices/`](devices/) 中维护平板源码和设备配置。这些设备配置尚未全部接入通用镜像构建流程。软件包开发说明见 [`packages/`](packages/README.md)；上游构建流程使用 [just](https://just.systems/) 和 [Podman](https://podman.io/)：
+系统镜像沿用 ArmadaOS 的 bootc 构建基础；统一内核位于 [`packages/kernel/`](packages/kernel/)，机型配置位于 [`system_files/usr/lib/armada/devices/`](system_files/usr/lib/armada/devices/)，设备专用资源和引导说明位于 [`devices/`](devices/)。软件包开发说明见 [`packages/`](packages/README.md)，构建命令使用 [just](https://just.systems/) 和 [Podman](https://podman.io/)：
 
 ```console
 $ just check     # 运行测试并检查构建配方格式
@@ -113,7 +105,7 @@ $ just build     # 构建 bootc 容器镜像；尚非可直接刷入平板的完
 $ just --list    # 查看开发命令
 ```
 
-设备适配请遵循对应目录中的配置与构建说明，并保留按机型匹配的机制。调试报告、设备日志、凭据、备份和本地构建产物均在仓库外保存。
+设备适配请遵循对应机型的配置与构建说明。系统更新源使用 Freedom 自有仓库；各机型的引导同步和 OTA 支持进度见设备文档。
 
 ## 支持项目
 

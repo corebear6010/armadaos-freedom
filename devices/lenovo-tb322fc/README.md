@@ -4,7 +4,7 @@ ArmadaOS Freedom 为 Y700 四代提供 kShimC 多系统启动、Steam 游戏模�
 
 | 项目 | 配置 |
 |---|---|
-| 型号 | Lenovo Legion Y700 Gen4 / TB322FC |
+| 型号 | TB322FC |
 | SoC | Qualcomm SM8750 |
 | 设备树标识 | `lenovo,elden`、`qcom,sm8750` |
 | 内核 | ArmadaOS Freedom 统一 Linux 7.2.6 |
@@ -49,6 +49,10 @@ ArmadaOS Freedom 为 Y700 四代提供 kShimC 多系统启动、Steam 游戏模�
 四代使用 `lenovo,elden` / SM8750，五代使用 `lenovo,baldur` / SM8850。两代仍需各自的设备树和启动载荷，**boot 镜像不能互刷**。统一内核并不意味着两代已经共用安装包或完成 OTA 验证。
 
 四代 Steam 会话重开的显示修正由 `0153`、`0154`、`0155` 内核补丁提供，按 `lenovo,elden` 匹配；五代显示支持使用独立的 Baldur 匹配。
+
+引导构建见[四代引导说明](boot/README.md)，其中分别介绍原厂 Android 基座打包和机身 Linux／诊断环境打包。四代使用 `tb322fc_android_defconfig` 启动器配置，不能直接套用五代的 DTB 和离线打包布局。
+
+系统更新目标为 Freedom 的 `ghcr.io/mydanyi/armadaos-freedom`，支持 `stable`、`beta`、`testing` 渠道。四代的引导同步由 [`armada-kshim-sync`](../../system_files/usr/libexec/armada/armada-kshim-sync) 及其配套工具处理；渠道配置与完整 OTA 验证是两项工作，当前验证范围见上方已知问题。
 
 ## 源码与来源
 

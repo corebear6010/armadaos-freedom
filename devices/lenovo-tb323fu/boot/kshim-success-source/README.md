@@ -9,6 +9,11 @@ through LVGL when a supported continuous splash is verified, with DT-selected
 GENI or PL011 serial selection when no usable splash exists.
 The default Manifest runtime remains a fixed 4 MiB slot.
 
+This source snapshot is shared by ArmadaOS Freedom's Y700 Gen 4 and Gen 5
+profiles. Its directory location under `lenovo-tb323fu` does not restrict it to
+Gen 5. See the [Gen 4 boot guide](../../../lenovo-tb322fc/boot/README.md) and
+[Gen 5 boot guide](../star-chart-build/README.md) for device-specific packaging.
+
 The runtime uses picolibc 1.8.11 and LVGL 9.2.2. Hardware libraries come from
 `lib/CrDK`, pinned at `b6c3335136b7f6b28271917de11e8f11982975fc`.
 `ports/crdk/prepare.py` verifies and applies the recorded patches into each
@@ -18,7 +23,10 @@ See [the CrDK port contract and provenance](ports/crdk/README.md).
 ## Build
 
 Install an AArch64 GCC toolchain, CMake, Ninja, Python 3.12+ and kconfiglib
-(`genconfig` on PATH). Initialize the dependencies and choose a profile:
+(`genconfig` on PATH). Restore the pinned dependencies before choosing a profile.
+This bundled snapshot omits the top-level dependency directories and Git metadata;
+follow the [dependency record](../../docs/SOURCES.md). In a full kShimC checkout,
+submodule initialization is one of the dependency preparation steps:
 
 ```sh
 git submodule update --init --recursive
@@ -32,7 +40,20 @@ for a Manifest runtime. CMake evaluates Kconfig at configure time and selects
 CrDK and UI sources by capability; `cmake --build` regenerates after config
 changes. The firmware uses the boot DT to obtain device addresses.
 
-### Unified external-initrd profile
+### Y700 device profiles
+
+| Device | Runtime profile | Boot packaging |
+|---|---|---|
+| Y700 Gen 4 / TB322FC | `configs/tb322fc_android_defconfig` | [Android or Linux layouts](../../../lenovo-tb322fc/boot/README.md) |
+| Y700 Gen 5 / TB323FU | `configs/tb323fu_unified_defconfig` | [Unified-kernel external initramfs](../star-chart-build/README.md) |
+
+Both device profiles enable STAR_CHART, Simplified Chinese, physical keys,
+advanced actions, device information and session settings. Gen 4 disables the
+debug console and boot timing; Gen 5 enables boot timing. Settings apply only
+to the current boot. Linux and Android menu entries come from the selected
+device's manifest and payloads.
+
+### Gen 5 external-initrd profile
 
 `configs/tb323fu_unified_defconfig` is the TB323FU profile for the external
 initrd Manifest work. It carries the shared launcher menu: the session-only
@@ -49,7 +70,8 @@ QEMU platform remain off.
 python3 tools/build_runtime.py --config configs/tb323fu_unified_defconfig --out build/tb323fu-unified
 ```
 
-See [current device status](../../README.md).
+See [Gen 4 status](../../../lenovo-tb322fc/README.md) and
+[Gen 5 status](../../README.md).
 
 ## Pack multiple kernels
 
@@ -142,31 +164,22 @@ and format. Supported layouts are linear RGB565, 32-bit RGB/BGR and verified
 shared-framebuffer split scans. An absent or ambiguous splash falls back to
 serial selection. kShimC does not initialize DSI hardware. Volume Up moves up,
 Volume Down moves down, and Power confirms. Touch selects a card; the separate
-Boot button confirms.
+Boot button confirms on profiles with supported touch input. The Y700 profiles
+disable launcher touch and use physical volume/power keys; this is separate
+from touchscreen support inside Linux.
 
-The menu has one flat, dark style (`src/ui/lvgl_port.c`, `src/ui/backdrop.c`):
-a borderless indigo acrylic panel (0x161c3e at 50%) centred over an animated
-background - a diagonal indigo gradient with an azure-to-lilac wash and four
-slowly drifting soft colour blobs, rendered at a bounded texture size and
-stretched. Rows are flat plates without borders or shadows; the focused row is
-the accent blue 0x2f6bf0 with white text, its label sliding in with an
-overshoot. The Boot button is a solid light plate with dark text.
+Menu styles are compile-time choices in `src/Kconfig` and `src/ui/styles/`.
+Both Y700 profiles select STAR_CHART, with landscape navigation, entry details,
+language selection and physical-key hints. See the [Y700 menu guide](docs/tb323fu-boot-menu.md)
+for current behavior. The other theme documents describe the earlier preset
+families and their rendering tools; they do not select the installed theme.
 
-Text uses Noto Sans CJK SC, drawn at any size by LVGL's TinyTTF: titles,
-rows and status text at 48/28/22 px on 720p+ panels (28/20/16 and 20/14/12
-on smaller ones). `src/ui/fonts/noto_sans_cjk_sc.ksf` holds an LZ4-compressed
-subset (4,479 glyphs: ASCII, Latin-1, Latin Extended-A, general and CJK
-punctuation, kana, full-width forms and the 3,755 GB2312 level-1 hanzi; 790
-KiB packed, 840 KiB inflated). It stays in the 4 MiB runtime slot compressed
-and is inflated at boot, with CRC check, into scratch RAM outside the slot:
-on Qualcomm boards the display reservation (`cont_splash_region`) past the
-scanout frame, which also holds the two background textures; on QEMU the
-`KSHIM_UI_SCRATCH_BASE/SIZE` window. Without scratch memory the menu falls
-back to Montserrat 20 (Latin only) on a plain background. The font is under
-the SIL Open Font License (`src/ui/fonts/OFL.txt`); `provenance.json` records
-the source and hashes. Regenerate it with
-`python3 tools/gen_ui_font.py [--source NotoSansCJKsc-Regular.otf]`
-(needs `pip install fonttools lz4`).
+STAR_CHART uses `src/ui/fonts/lxgw_wenkai_menu.ksf`, an LXGW WenKai menu subset.
+Other styles use the Noto Sans CJK SC subset. CMake selects the matching blob;
+LVGL's TinyTTF renders the text. Font licenses and source records remain in
+`src/ui/fonts/`. When changing menu text, regenerate the corresponding subset
+with `tools/gen_ui_font.py` and update the
+[required menu characters](../star-chart-build/menu-required-text.txt).
 
 The MIX 3 5G profile is `andromeda`: ST FTM5 (not FocalTech), GENI I2C at
 0x49, 1080 x 2340. Its bus, clocks, GPIOs, CmdDB and RPMh setup are independent
@@ -179,7 +192,7 @@ The FTM5 driver sources fetched from GitHub are pinned with hashes in
 8 mA pull-up configuration; the power sequence enables GPIO37, waits 4 ms,
 enables the fixed 1.8 V RPMh rail, then pulses reset for 10 ms.
 
-Both touch drivers deliver every FIFO contact transition to LVGL, so a tap
+The touch input path delivers every FIFO contact transition to LVGL, so a tap
 whose press and release arrive in one read still selects a card or confirms
 the Boot button. A controller reset, bus error or shutdown cancels the contact
 without generating a click. FTM5 also handles a moving finger whose ENTER

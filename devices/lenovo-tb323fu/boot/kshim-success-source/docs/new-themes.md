@@ -1,5 +1,10 @@
 # Metro, One UI, Adwaita and Holo
 
+This is the implementation record for these preset families and the later
+native LVGL option. Counts and comparison commits below refer to those
+development stages. Current Y700 profiles select STAR_CHART; see the
+[Y700 menu guide](tb323fu-boot-menu.md) for device defaults.
+
 Four additional compile-time presets extend the existing 25 choices. They use
 the real pinned LVGL renderer, existing CJK font and shared boot/input state
 machine. No native toolkit, proprietary font, OS logo or inactive control is

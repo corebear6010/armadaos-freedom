@@ -1,7 +1,11 @@
 # Authentic theme review artifacts
 
-The design-language implementation is on `feature/2610-design-language`, reviewed
-through PR #1 against `feature/2610`. FLAT is not redesigned. The first complete
+This page preserves the historical theme-gallery workflow. It does not select
+the installed Y700 theme; current profiles are described in the
+[Y700 menu guide](tb323fu-boot-menu.md).
+
+The design-language implementation was developed on `feature/2610-design-language`
+and reviewed through PR #1 against `feature/2610`. FLAT was not redesigned. The first complete
 firmware/render validation at `e0906584a298a9c4e8d6c7eda3f194291183b797` passed
 25 complete host CTest configurations (17 tests each), all 24 redesigned ARM64
 runtime configurations and the GCC/Clang/Kconfig contracts. The workflow is the
@@ -69,6 +73,6 @@ recording. Test/build success is not proof of native toolkit conformance, target
 frame rate, input latency, memory suitability or complete accessibility.
 
 Glass redraw cost, fixed-advance ASCII typography, effective design-unit scaling
-and the reduced-effects path still require target-device review. Do not merge
-PR #1 automatically on the basis of image hashes. No proprietary fonts or brand
-image bundles are distributed by the gallery builder.
+and the reduced-effects path require target-device measurements; image hashes
+alone do not establish their performance. No proprietary fonts or brand image
+bundles are distributed by the gallery builder.

@@ -1,12 +1,25 @@
-# STAR_CHART 构建配方
+# Y700 五代引导构建与打包
 
-配套源码位于 [`../kshim-success-source/`](../kshim-success-source/)，固定来源见 [SOURCES.md](../../docs/SOURCES.md)。此目录提供构建脚本和输入约定，尚不是全新克隆后即可一键生成设备镜像的工程。
+适用于 TB323FU / SM8850P（Baldur）。配套 [kShimC 源码](../kshim-success-source/README.md) 由四代与五代共用，固定来源见 [SOURCES.md](../../docs/SOURCES.md)。本目录的打包布局与 DTB 检查针对五代；四代使用[独立引导说明](../../../lenovo-tb322fc/boot/README.md)。
+
+当前统一 Linux 7.2.6 的五代引导使用外置 initramfs。完整流程是准备本机原厂 Android 输入、构建 runtime、生成匹配内核的 initramfs，再打包 boot；所需原厂输入和依赖须自行准备。
+
+## 选择构建路径
+
+| 场景 | 入口 |
+|---|---|
+| 五代 runtime | `configs/tb323fu_unified_defconfig`，使用共享源码中的 `tools/build_runtime.py` |
+| 外置 initramfs | [外置 initramfs 说明](EXTERNAL_INITRAMFS.md) |
+| 统一内核 boot | `build_offline_boot.py`，传入 `--initrd` 使用九条目布局 |
+| 早期内置 initramfs 流程 | `build.sh`，使用 `tb323fu_defconfig`，默认调用不带 `--initrd` 的八条目打包 |
+
+`build.sh` 不会自动改用外置 initramfs。两个 runtime 配置目前都启用 STAR_CHART 和会话设置；是否使用外置 initramfs 仍由 Linux 载荷、DTB 和打包参数决定。
 
 ## 文件
 
 | 文件 | 用途 |
 |---|---|
-| `build.sh` | 主机测试、主题预览、ARM64 runtime、QEMU 与 boot 打包流程 |
+| `build.sh` | 早期八条目流程：主机测试、主题预览、ARM64 runtime、QEMU 与 boot 打包 |
 | `build_offline_boot.py` | 使用独立输入组装并校验八条目 manifest 和 boot；可选外置 initramfs 九条目布局 |
 | `build_external_initramfs.py` | 由内置 initramfs 模板和统一内核模块目录重建外置 initramfs |
 | `repack_boot_v4.py` | 保持 boot v4 包装结构的重打包工具 |
@@ -65,4 +78,4 @@
 
 菜单使用 `src/ui/fonts/lxgw_wenkai_menu.ksf`，来源及 OFL 许可位于资产同目录。使用 `tools/gen_ui_font.py` 的菜单覆盖模式和 `menu-required-text.txt` 维护子集；新增菜单、翻译或 manifest 标签后，更新清单并验证字形及预览。菜单子集不是完整中文字库。
 
-本目录不提供 OTA 集成。固定依赖和设备 payload 的自动准备、完整镜像构建入口仍待完善。
+本目录提供离线构建，不负责部署和 OTA。系统中的 `armada-kshim-sync` 当前只匹配四代 Elden，不能用于五代。固定依赖、设备输入的自动准备以及五代完整安装／更新流程仍待完善，状态见[五代设备文档](../../README.md#已知限制)。
