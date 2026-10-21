@@ -12,6 +12,8 @@
 
 ## 构建 4 MiB runtime
 
+构建前先按[共享依赖准备指引](../../lenovo-tb323fu/boot/kshim-success-source/DEPENDENCIES.md)恢复 CrDK、picolibc、LVGL 与 libfdt，并核对固定版本；快照本身不包含这些目录，也不含可用的 Git 元数据。
+
 runtime 由共享源码树构建（`K = devices/lenovo-tb323fu/boot/kshim-success-source`），
 使用独立的 `tb322fc_android_defconfig`。配置名中的 `android` 不限制它只能显示 Android；Linux 条目由打包时的 manifest 提供。
 
