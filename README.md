@@ -1,132 +1,146 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset=".github/assets/armada-mark-white.svg">
-    <img src=".github/assets/armada-mark-black.svg" alt="Armada 标志" width="112">
+    <img src=".github/assets/armada-mark-black.svg" alt="Armada" width="112">
   </picture>
 </p>
 
 <h1 align="center">ArmadaOS Freedom</h1>
 
-<p align="center"><strong>简体中文</strong> · <a href="README.en.md">English</a></p>
+<p align="center"><strong>English</strong> · <a href="README.zh-CN.md">简体中文</a></p>
 
-<p align="center"><strong>面向 ARM 平板的 SteamOS 风格 Linux 系统</strong></p>
+<p align="center"><strong>SteamOS-like Linux for ARM tablets</strong></p>
 
 <p align="center">
-  基于 <a href="https://github.com/armada-os/armada">ArmadaOS</a> 的平板适配分支，
-  为 ARM64 平板带来 Steam 游戏模式、FEX、Proton 和 KDE Plasma 桌面，
-  使用 kShimC 实现多系统启动。
+  A tablet-focused fork of <a href="https://github.com/armada-os/armada">ArmadaOS</a>,
+  bringing Steam Gaming Mode, FEX, Proton, and KDE Plasma to ARM64 tablets,
+  with kShimC multi-boot.
 </p>
 
 <p align="center">
-  <a href="https://github.com/armada-os/armada"><img alt="基于 ArmadaOS" src="https://img.shields.io/badge/基于-ArmadaOS-18181a?style=flat"></a>
-  <a href="#设备支持"><img alt="Y700 四代与五代平板适配" src="https://img.shields.io/badge/当前适配-Y700_四代与五代-285580?style=flat"></a>
-  <a href="LICENSE"><img alt="GPL-2.0-or-later 许可证" src="https://img.shields.io/badge/许可证-GPL--2.0--or--later-18181a?style=flat"></a>
+  <a href="https://github.com/armada-os/armada"><img alt="Based on ArmadaOS" src="https://img.shields.io/badge/based_on-ArmadaOS-18181a?style=flat"></a>
+  <a href="#device-support"><img alt="Y700 Gen 4 and Gen 5 tablet adaptation" src="https://img.shields.io/badge/devices-Y700_Gen_4_%26_5-285580?style=flat"></a>
+  <a href="LICENSE"><img alt="GPL-2.0-or-later license" src="https://img.shields.io/badge/license-GPL--2.0--or--later-18181a?style=flat"></a>
 </p>
 
 <p align="center">
-  <a href="#设备支持"><strong>设备支持与适配状态</strong></a>
+  <a href="#device-support"><strong>Device support &amp; status</strong></a>
   ·
-  <a href="#kshimc-多系统启动">启动菜单</a>
+  <a href="#kshimc-multi-boot">Boot menu</a>
   ·
-  <a href="#文档导航">文档导航</a>
+  <a href="#documentation">Documentation</a>
   ·
-  <a href="https://armadaos.dev/">上游文档</a>
-  ·
-  <a href="#支持项目">支持项目</a>
+  <a href="https://armadaos.dev/">Upstream documentation</a>
 </p>
 
-## 关于 ArmadaOS Freedom
+## About ArmadaOS Freedom
 
-ArmadaOS Freedom 是基于 [ArmadaOS](https://github.com/armada-os/armada)、由社区维护的平板适配分支。我们保留上游的游戏和桌面系统基础，针对平板硬件调整启动、显示、电源、外设及 Armada Control。
+ArmadaOS Freedom is a community-maintained tablet branch based on
+[ArmadaOS](https://github.com/armada-os/armada). It retains the upstream gaming
+and desktop foundation while adapting boot, display, power, peripherals, and
+Armada Control to tablet hardware.
 
-目前已接入的功能：
+Highlights of the current adaptation:
 
-- Steam 游戏模式与 KDE Plasma 桌面，沿用 ArmadaOS 的 FEX 和 Proton 支持。
-- 统一内核构建，按机型加载设备树、驱动和硬件配置。
-- kShimC 多系统启动，可分别选择机身存储和 TF 卡中的 Linux 系统。
-- 按设备型号匹配的显示档位、触屏、电源、音频与网络配置。
-- 双 USB 端口适配，以及电池和温度数据采集。
-- 平板触屏输入，以及 G9／G9 2026 手柄按键映射、RGB 控制和双击 Home 打开右侧快捷菜单。
-- 面向平板的 Armada Control 适配，包括在无风扇设备上隐藏风扇控制。
+- Steam Gaming Mode and KDE Plasma, with FEX and Proton from ArmadaOS.
+- A shared kernel build with device-specific device trees, drivers, and hardware
+  configuration.
+- kShimC multi-boot with separate internal-storage and TF-card Linux entries.
+- Device-specific display modes, touch, power, audio, and network configuration.
+- Dual-USB support, plus battery and temperature reporting.
+- Tablet touch input, plus G9 / G9 2026 controller mapping, RGB control, and
+  double-Home quick access.
+- Tablet-aware Armada Control, including hiding fan controls on fanless devices.
 
-各项功能的可用范围因设备而异，具体状态见下方设备文档。本仓库目前维护适配源码与补丁，平板安装镜像和 OTA 更新流程仍在完善中。
+Feature availability varies by device; see the device pages below for details.
+This repository maintains adaptation sources and patches. Tablet installation
+images and OTA integration are still in development.
 
-## 设备支持
+## Device support
 
-目前适配联想拯救者 Y700 四代与五代，两代共用 Linux **7.2.6** 内核，并分别维护设备树和硬件配置。
+Current device work covers Lenovo Legion Y700 Gen 4 and Gen 5. Both share a Linux
+**7.2.6** kernel, with separate device trees and hardware configuration.
 
-| 设备 | 型号 / SoC | 设备文档 | 已知问题 |
+| Device | Model / SoC | Documentation | Known issues |
 |---|---|---|---|
-| 联想拯救者 Y700 四代 | TB322FC / SM8750 | [四代设备文档](devices/lenovo-tb322fc/README.md) | [四代已知问题](devices/lenovo-tb322fc/README.md#已知问题与待完成项) |
-| 联想拯救者 Y700 五代 | TB323FU / SM8850P | [五代设备文档](devices/lenovo-tb323fu/README.md) | [五代已知问题](devices/lenovo-tb323fu/README.md#已知限制) |
+| Lenovo Legion Y700 Gen 4 | TB322FC / SM8750 | [Gen 4 documentation](devices/lenovo-tb322fc/README.md) | [Gen 4 known issues](devices/lenovo-tb322fc/README.md#已知问题与待完成项) |
+| Lenovo Legion Tab Gen 5 / Y700 Gen 5 | TB323FU / SM8850P | [Gen 5 documentation](devices/lenovo-tb323fu/README.md) | [Gen 5 known issues](devices/lenovo-tb323fu/README.md#已知限制) |
 
-两代的启动镜像仍需匹配各自设备，不能直接互刷。
+Boot images remain model-specific and must not be cross-flashed.
 
-## kShimC 多系统启动
+## kShimC multi-boot
 
-平板使用 **kShimC** 启动器，与启动所需的内核等内容一起打包到 Android boot 镜像中。在保留原厂启动链的基础上，提供以下菜单：
+The tablet boot path uses **kShimC**, packaged with the boot payloads in the
+Android boot image. It keeps the factory boot chain and presents a menu for:
 
-- 启动 Android。
-- 启动安装在机身存储中的 ArmadaOS。
-- 启动安装在 TF／microSD 卡中的 ArmadaOS。
-- 高级启动模式：Linux 诊断、Recovery 恢复模式、Fastboot 和 9008／EDL。
-- 设置、设备信息、语言选择、重启和关机。
+- Android.
+- ArmadaOS installed in internal storage.
+- ArmadaOS installed on a TF / microSD card.
+- Advanced boot: Linux diagnostics, Recovery, Fastboot, and 9008 / EDL.
+- Settings, device information, language selection, restart, and shutdown.
 
-Linux 内核和设备树随 boot 镜像打包；内核启动后，根据所选条目挂载机身或 TF 卡上的根文件系统。机身安装和 TF 卡安装是两个独立目标，入口的可用范围见各机型文档。
+The Linux kernel and device tree are boot payloads; Linux then mounts the root
+filesystem selected by the internal-storage or TF-card entry. These are two
+separate installation targets. See each device page for available boot entries.
 
 <p align="center">
-  <img src=".github/assets/kshimc-star-chart-zh.png" alt="KShimC 启动器：STAR_CHART 主题简体中文菜单" width="100%">
+  <img src=".github/assets/kshimc-star-chart-en.png" alt="KShimC launcher — STAR_CHART theme, English menu" width="100%">
 </p>
 
-*上图为当前实现生成的 STAR_CHART 菜单渲染预览，非平板实拍。*
+*STAR_CHART menu rendered from the current implementation; this is a software
+preview, not a photograph of the tablet.*
 
-两代共用 [kShimC 启动器源码](devices/lenovo-tb323fu/boot/kshim-success-source/README.md)，分别选择对应的机型配置和启动载荷。构建入口见[四代引导说明](devices/lenovo-tb322fc/boot/README.md)与[五代引导说明](devices/lenovo-tb323fu/boot/star-chart-build/README.md)。
+Both generations share the [kShimC launcher sources](devices/lenovo-tb323fu/boot/kshim-success-source/README.md),
+with separate device profiles and boot payloads. See the
+[Gen 4 boot guide](devices/lenovo-tb322fc/boot/README.md) and
+[Gen 5 boot guide](devices/lenovo-tb323fu/boot/star-chart-build/README.md)
+for their build paths.
 
-## 文档导航
+## Documentation
 
-| 我想了解…… | 对应文档 |
+| I want to… | Guide |
 |---|---|
-| 如何构建启动镜像 | [四代引导说明](devices/lenovo-tb322fc/boot/README.md) · [五代引导说明](devices/lenovo-tb323fu/boot/star-chart-build/README.md) |
-| 系统内使用哪些引导工具 | [kShimC 打包工具](packages/kshim-tools/README.md) |
-| 组件来源与固定版本 | [四代源码与来源](devices/lenovo-tb322fc/README.md#源码与来源) · [五代来源记录](devices/lenovo-tb323fu/docs/SOURCES.md) |
-| 上游系统如何使用 | [ArmadaOS 使用文档](https://armadaos.dev/using-armada/) |
-| 反馈本分支的问题 | [Freedom 问题反馈](https://github.com/mydanyi/armadaos-freedom/issues) |
+| Build a boot image | [Gen 4 boot guide](devices/lenovo-tb322fc/boot/README.md) · [Gen 5 boot guide](devices/lenovo-tb323fu/boot/star-chart-build/README.md) |
+| Inspect the installed boot tools | [kShimC packaging tools](packages/kshim-tools/README.md) |
+| Check component origins and versions | [Gen 4 sources](devices/lenovo-tb322fc/README.md#源码与来源) · [Gen 5 sources](devices/lenovo-tb323fu/docs/SOURCES.md) |
+| Learn the upstream system | [Using ArmadaOS](https://armadaos.dev/using-armada/) |
+| Report a tablet-branch issue | [Freedom issues](https://github.com/mydanyi/armadaos-freedom/issues) |
 
-上游安装说明适用于上游支持的设备。平板的安装与启动方式请以本仓库对应机型的文档为准。
+Upstream installation instructions describe upstream-supported devices. Use the
+model-specific documentation here for tablet installation and boot.
 
-## 开发与构建
+## Development
 
-系统镜像沿用 ArmadaOS 的 bootc 构建基础；统一内核位于 [`packages/kernel/`](packages/kernel/)，机型配置位于 [`system_files/usr/lib/armada/devices/`](system_files/usr/lib/armada/devices/)，设备专用资源和引导说明位于 [`devices/`](devices/)。软件包开发说明见 [`packages/`](packages/README.md)，构建命令使用 [just](https://just.systems/) 和 [Podman](https://podman.io/)：
+System images use ArmadaOS's bootc build foundation. The shared kernel lives in
+[`packages/kernel/`](packages/kernel/), hardware profiles in
+[`system_files/usr/lib/armada/devices/`](system_files/usr/lib/armada/devices/),
+and device-specific resources and boot guides in [`devices/`](devices/).
+Package development is documented in [`packages/`](packages/README.md). Recipes use
+[just](https://just.systems/) and [Podman](https://podman.io/):
 
 ```console
-$ just check     # 运行测试并检查构建配方格式
-$ just packages  # 构建镜像使用的软件包
-$ just build     # 构建 bootc 容器镜像；尚非可直接刷入平板的完整镜像
-$ just --list    # 查看开发命令
+$ just check     # Run the test suite and check recipe formatting
+$ just packages  # Build the packages the image consumes
+$ just build     # Build the bootc container; not a ready-to-flash tablet image
+$ just --list    # List development recipes
 ```
 
-设备适配请遵循对应机型的配置与构建说明。系统更新源使用 Freedom 自有仓库；各机型的引导同步和 OTA 支持进度见设备文档。
+Follow the configuration and build guide for the target device. System updates
+use Freedom's own repository; see each device page for boot synchronization
+and OTA support status.
 
-## 支持项目
+## Credits
 
-ArmadaOS Freedom 目前靠热爱和自费投入持续推进。从启动、显示到供电和外设，每一项平板适配都需要反复测试，也需要长期跟进上游更新。
+- System foundation: [ArmadaOS](https://github.com/armada-os/armada), built on
+  [Fedora bootc](https://github.com/bootc-dev/bootc).
+- Boot menu: [kShimC](https://github.com/sunflower2333/kShimC/tree/feature/2610).
+- Armada logo: [Rax](https://github.com/Raxcoms).
 
-如果这些工作对你有帮助，欢迎通过支付宝或微信自愿赞助，支持设备测试、系统适配和持续维护。量力而行，谢谢每一份支持。
+See the [upstream credits](https://armadaos.dev/project/credits/) for more
+contributors and the [device documentation](#device-support) for component
+origins and pinned versions. Individual components retain their source
+attribution and licenses.
 
-<p align="center">
-  <img src=".github/assets/sponsor-zh.png" alt="支持 ArmadaOS Freedom 平板适配：支付宝和微信赞助二维码，自愿支持，量力而行" width="100%">
-</p>
+## License
 
-反馈问题、提交代码和完善文档，同样是在支持项目。
-
-## 致谢
-
-- 系统基础：[ArmadaOS](https://github.com/armada-os/armada)，基于 [Fedora bootc](https://github.com/bootc-dev/bootc)。
-- 启动菜单：[kShimC](https://github.com/sunflower2333/kShimC/tree/feature/2610)。
-- Armada 标志：[Rax](https://github.com/Raxcoms)。
-
-更多贡献者见[上游致谢](https://armadaos.dev/project/credits/)，设备适配的组件来源与固定版本见[对应设备文档](#设备支持)。各组件保留原有的来源署名和许可证。
-
-## 许可证
-
-除文件或组件另有声明外，armadaos-freedom 原创软件和脚本采用 **GPL-2.0-or-later** 许可证。我们的原创贡献由 danyi 及 armadaos-freedom 各贡献者享有版权（Copyright (C) 2026）。继承的 ArmadaOS 代码及其他组件保留各自的版权和适用许可。详见 [LICENSE](LICENSE) 和[许可与版权说明](LICENSING.zh-CN.md)（[English](LICENSING.md)）。
+Original armadaos-freedom software and scripts are licensed under **GPL-2.0-or-later**, unless a file or component specifies otherwise. Copyright (C) 2026 danyi and the armadaos-freedom contributors, for their original contributions. Inherited ArmadaOS code and other components retain their copyrights and applicable licenses. See [LICENSE](LICENSE) and [licensing and copyright](LICENSING.md) ([简体中文](LICENSING.zh-CN.md)).
