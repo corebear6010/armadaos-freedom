@@ -81,6 +81,11 @@ typedef struct {
     size_t region_count;
     uint64_t entry_el;
     uint8_t configured;
+    /* HCR_EL2 as it was before this runtime touched it, and whether it was
+     * captured at all.  Only the EL2 path writes HCR, and the payload inherits
+     * whatever is left in it, so the entry value has to go back at handoff. */
+    uint64_t entry_hcr_el2;
+    uint8_t entry_hcr_valid;
 } mmu_context_t;
 
 static translation_table_t mTables[MMU_TABLE_COUNT]
@@ -376,6 +381,13 @@ static int enable_at_el(uint64_t exception_level)
 
         /* Use the non-VHE EL2 translation regime and keep execution at EL2. */
         __asm__ volatile("mrs %0, hcr_el2" : "=r"(hcr));
+        /* Keep the entry value: the payload runs on with whatever HCR holds,
+         * and E2H/TGE change how EL2 itself behaves, so handoff has to put
+         * this back rather than leave our configuration behind. */
+        if (mMmu.entry_hcr_valid == 0U) {
+            mMmu.entry_hcr_el2 = hcr;
+            mMmu.entry_hcr_valid = 1U;
+        }
         hcr &= ~((UINT64_C(1) << 34) | (UINT64_C(1) << 27));
         __asm__ volatile("msr hcr_el2, %0\nisb" : : "r"(hcr) : "memory");
         tcr = UINT64_C(16) | (UINT64_C(1) << 8) |
@@ -646,13 +658,43 @@ int kshim_mmu_prepare_handoff(void)
 #if defined(__aarch64__)
     __asm__ volatile("dsb sy\nic iallu\ndsb sy\nisb" ::: "memory");
 #endif
+    /* Put HCR_EL2 back before the payload inherits it.  enable_at_el() cleared
+     * E2H and TGE; leaving that behind changes how later EL2 entries (PSCI,
+     * cpuidle, suspend) behave, which is not ours to change.  The captured
+     * entry value is restored verbatim rather than reconstructed from bits
+     * this runtime never inspected.
+     *
+     * This runs on the handing-off CPU only: kshim_mmu_cpu_off_prepare() has
+     * its own path below and must not consume the snapshot, because a
+     * secondary core stopping first would otherwise clear the flag and leave
+     * the payload with this runtime's HCR. */
+#if defined(__aarch64__)
+    if (mMmu.entry_hcr_valid != 0U) {
+        __asm__ volatile("msr hcr_el2, %0\nisb"
+                         : : "r"(mMmu.entry_hcr_el2) : "memory");
+        mMmu.entry_hcr_valid = 0U;
+    }
+#endif
     disable_at_el(current_el());
     return 0;
 }
 
 void kshim_mmu_cpu_off_prepare(void)
 {
-    (void)kshim_mmu_prepare_handoff();
+    /* A core that is about to park still has to get its own translation off
+     * and its dirty lines out, but it must leave HCR_EL2 and the snapshot
+     * alone: the handing-off CPU owns both. */
+    if (!mMmu.configured)
+        return;
+    for (size_t index = 0; index < mMmu.region_count; index++) {
+        if (mMmu.regions[index].type == KSHIM_MMU_NORMAL_WB &&
+            (mMmu.regions[index].permissions & KSHIM_MMU_WRITE))
+            clean_range(mMmu.regions[index].base, mMmu.regions[index].size);
+    }
+#if defined(__aarch64__)
+    __asm__ volatile("dsb sy\nic iallu\ndsb sy\nisb" ::: "memory");
+#endif
+    disable_at_el(current_el());
 }
 
 void _arm64_mmu_setup(void)
@@ -820,7 +862,15 @@ int kshim_mmu_configure_early(const kshim_mmu_early_config_t *config)
 
 failed:
     /* Leave nothing behind: smp.c keys off the root table pointer, so a half
-     * built context must look exactly like an untouched one. */
+     * built context must look exactly like an untouched one.  A failure after
+     * enable_at_el() may already have changed HCR_EL2, so the captured entry
+     * value is restored first and kept across the clear. */
+#if defined(__aarch64__)
+    if (mMmu.entry_hcr_valid != 0U) {
+        __asm__ volatile("msr hcr_el2, %0\nisb"
+                         : : "r"(mMmu.entry_hcr_el2) : "memory");
+    }
+#endif
     memset(&mMmu, 0, sizeof(mMmu));
     memset(mTables, 0, sizeof(mTables));
     return status;
@@ -849,7 +899,14 @@ int kshim_mmu_add_region(uint64_t base, uint64_t size,
         };
     clean_range((uint64_t)(uintptr_t)mTables, sizeof(mTables));
 #if defined(__aarch64__)
-    __asm__ volatile("dsb sy\ntlbi vmalle1\ndsb sy\nisb" ::: "memory");
+    /* The invalidation must name the regime the table is live in.  Writing
+     * vmalle1 while running at EL2 leaves the EL2 TLB untouched, so the
+     * overwritten range keeps its previous attributes until the next
+     * conflict. */
+    if (mMmu.entry_el == CURRENT_EL2)
+        __asm__ volatile("dsb sy\ntlbi alle2\ndsb sy\nisb" ::: "memory");
+    else
+        __asm__ volatile("dsb sy\ntlbi vmalle1\ndsb sy\nisb" ::: "memory");
 #endif
     return 0;
 }
