@@ -348,6 +348,11 @@ int kshim_mmu_is_enabled(void) { return 1; }
 uint64_t kshim_mmu_root_table(void) { return 1; }
 int kshim_mmu_configure_default(const void *fdt) { (void)fdt; return 0; }
 int kshim_mmu_enable_current_cpu(void) { return 0; }
+/* platform_select() re-maps the scanout and UI scratch non-cacheable once the
+ * panel is known; the host build has no page tables, so the call is accepted. */
+int kshim_mmu_add_region(uint64_t base, uint64_t size,
+                         kshim_mmu_memory_type_t type, uint32_t permissions)
+{ (void)base; (void)size; (void)type; (void)permissions; return 0; }
 int kshim_mmu_prepare_handoff(void) { ++h.handoff_calls; return h.handoff_result; }
 void kshim_boot_set_args(uint64_t fdt, uint64_t a, uint64_t b, uint64_t c)
 { (void)fdt; (void)a; (void)b; (void)c; }
