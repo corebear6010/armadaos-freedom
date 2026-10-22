@@ -152,7 +152,7 @@ except RuntimeError:
 else:
     raise AssertionError("unsupported bottom-screen brightness was changed")
 
-plugin_lib = root / "decky/armada-control/py_modules"
+plugin_lib = root / "decky/freedom-control/decky/armada-control/py_modules"
 sys.path.insert(0, str(plugin_lib))
 from armada_control import system as plugin_system
 

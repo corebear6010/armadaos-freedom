@@ -37,7 +37,7 @@
 
 ## 关于 ArmadaOS Freedom
 
-ArmadaOS Freedom 是基于 [ArmadaOS](https://github.com/armada-os/armada)、由社区维护的平板适配分支。我们保留上游的游戏和桌面系统基础，针对平板硬件调整启动、显示、电源、外设及 Armada Control。
+ArmadaOS Freedom 是基于 [ArmadaOS](https://github.com/armada-os/armada)、由社区维护的平板适配分支。我们保留上游的游戏和桌面系统基础，针对平板硬件调整启动、显示、电源和外设，控制插件则采用 [Freedom Control](https://github.com/mydanyi/freedom-control)。
 
 目前已接入的功能：
 
@@ -47,7 +47,7 @@ ArmadaOS Freedom 是基于 [ArmadaOS](https://github.com/armada-os/armada)、由
 - 按设备型号匹配的显示档位、触屏、电源、音频与网络配置。
 - 双 USB 端口适配，以及电池和温度数据采集。
 - 平板触屏输入，以及 G9／G9 2026 手柄按键映射、RGB 控制和双击 Home 打开右侧快捷菜单。
-- 面向平板的 Armada Control 适配，包括在无风扇设备上隐藏风扇控制。
+- 面向平板的 [Freedom Control](https://github.com/mydanyi/freedom-control) 适配，包括在无风扇设备上隐藏风扇控制。
 
 各项功能的可用范围因设备而异，具体状态见下方设备文档。本仓库目前维护适配源码与补丁，平板安装镜像和 OTA 更新流程仍在完善中。
 
@@ -99,11 +99,31 @@ Linux 内核和设备树随 boot 镜像打包；内核启动后，根据所选�
 系统镜像沿用 ArmadaOS 的 bootc 构建基础；统一内核位于 [`packages/kernel/`](packages/kernel/)，机型配置位于 [`system_files/usr/lib/armada/devices/`](system_files/usr/lib/armada/devices/)，设备专用资源和引导说明位于 [`devices/`](devices/)。软件包开发说明见 [`packages/`](packages/README.md)，构建命令使用 [just](https://just.systems/) 和 [Podman](https://podman.io/)：
 
 ```console
+$ git submodule update --init --recursive
 $ just check     # 运行测试并检查构建配方格式
 $ just packages  # 构建镜像使用的软件包
 $ just build     # 构建 bootc 容器镜像；尚非可直接刷入平板的完整镜像
 $ just --list    # 查看开发命令
 ```
+
+### Freedom Control
+
+控制插件来自固定版本的 [Freedom Control](https://github.com/mydanyi/freedom-control) 依赖，位于 `decky/freedom-control`。本仓库不再维护插件源码副本，因此首次检出后需要获取固定版本：
+
+```console
+$ git submodule update --init --recursive
+```
+
+需要升级插件版本时，请显式更新依赖并提交新的指针：
+
+```console
+$ git submodule update --remote decky/freedom-control
+$ just check
+$ git add decky/freedom-control
+$ git commit -m "Update Freedom Control"
+```
+
+插件仍安装在原有目录，服务与套接字接口保持不变，已有设置和相关集成可继续使用。少数 SM8850 配套文件（电源守护进程、TB323FU 机型配置和 SM8850 电源档位层）同样取自该依赖，系统其余部分仍由本仓库维护。
 
 设备适配请遵循对应机型的配置与构建说明。系统更新源使用 Freedom 自有仓库；各机型的引导同步和 OTA 支持进度见设备文档。
 
@@ -123,6 +143,7 @@ ArmadaOS Freedom 目前靠热爱和自费投入持续推进。从启动、显示
 
 - 系统基础：[ArmadaOS](https://github.com/armada-os/armada)，基于 [Fedora bootc](https://github.com/bootc-dev/bootc)。
 - 启动菜单：[kShimC](https://github.com/sunflower2333/kShimC/tree/feature/2610)。
+- 控制插件：[Freedom Control](https://github.com/mydanyi/freedom-control)。
 - Armada 标志：[Rax](https://github.com/Raxcoms)。
 
 更多贡献者见[上游致谢](https://armadaos.dev/project/credits/)，设备适配的组件来源与固定版本见[对应设备文档](#设备支持)。各组件保留原有的来源署名和许可证。

@@ -1,5 +1,5 @@
 [Unit]
-Description=Armada Control privileged settings service
+Description=Freedom Control privileged settings service
 After=armada-device-quirks.service inputplumber.service armada-powerd.service
 
 [Service]

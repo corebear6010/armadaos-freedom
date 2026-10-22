@@ -37,8 +37,10 @@
 
 ArmadaOS Freedom is a community-maintained tablet branch based on
 [ArmadaOS](https://github.com/armada-os/armada). It retains the upstream gaming
-and desktop foundation while adapting boot, display, power, peripherals, and
-Armada Control to tablet hardware.
+and desktop foundation while adapting boot, display, power, and peripherals to
+tablet hardware, and ships
+[Freedom Control](https://github.com/mydanyi/freedom-control) as its control
+plugin.
 
 Highlights of the current adaptation:
 
@@ -50,7 +52,8 @@ Highlights of the current adaptation:
 - Dual-USB support, plus battery and temperature reporting.
 - Tablet touch input, plus G9 / G9 2026 controller mapping, RGB control, and
   double-Home quick access.
-- Tablet-aware Armada Control, including hiding fan controls on fanless devices.
+- Tablet-aware [Freedom Control](https://github.com/mydanyi/freedom-control),
+  including hiding fan controls on fanless devices.
 
 Feature availability varies by device; see the device pages below for details.
 This repository maintains adaptation sources and patches. Tablet installation
@@ -119,11 +122,38 @@ Package development is documented in [`packages/`](packages/README.md). Recipes 
 [just](https://just.systems/) and [Podman](https://podman.io/):
 
 ```console
+$ git submodule update --init --recursive
 $ just check     # Run the test suite and check recipe formatting
 $ just packages  # Build the packages the image consumes
 $ just build     # Build the bootc container; not a ready-to-flash tablet image
 $ just --list    # List development recipes
 ```
+
+### Freedom Control
+
+The control plugin ships from the pinned
+[Freedom Control](https://github.com/mydanyi/freedom-control) dependency at
+`decky/freedom-control`. This repository no longer maintains an inline copy of
+the plugin source, so a fresh clone needs the pinned revision:
+
+```console
+$ git submodule update --init --recursive
+```
+
+To move to a newer plugin revision, update the dependency deliberately and
+commit the new pointer:
+
+```console
+$ git submodule update --remote decky/freedom-control
+$ just check
+$ git add decky/freedom-control
+$ git commit -m "Update Freedom Control"
+```
+
+The plugin keeps its installed directory and its service and socket interfaces,
+so existing settings and integrations continue to work. A few SM8850 companion
+files — the power daemon, the TB323FU board profile, and the SM8850 power-profile
+layer — come from the same dependency; the rest of the host OS remains here.
 
 Follow the configuration and build guide for the target device. System updates
 use Freedom's own repository; see each device page for boot synchronization
@@ -134,6 +164,7 @@ and OTA support status.
 - System foundation: [ArmadaOS](https://github.com/armada-os/armada), built on
   [Fedora bootc](https://github.com/bootc-dev/bootc).
 - Boot menu: [kShimC](https://github.com/sunflower2333/kShimC/tree/feature/2610).
+- Control plugin: [Freedom Control](https://github.com/mydanyi/freedom-control).
 - Armada logo: [Rax](https://github.com/Raxcoms).
 
 See the [upstream credits](https://armadaos.dev/project/credits/) for more
