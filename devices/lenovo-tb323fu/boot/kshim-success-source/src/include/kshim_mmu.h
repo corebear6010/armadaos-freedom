@@ -35,20 +35,20 @@ typedef struct {
     uint8_t map_qemu_test_windows;
 } kshim_mmu_config_t;
 
+/* Builders refuse to replace a table pool after its first enable. */
 int kshim_mmu_configure(const kshim_mmu_config_t *config);
 int kshim_mmu_configure_default(const void *fdt);
 
 /* Early configuration, called from kshim_main() before the console, the DT
  * snapshot or any resource probing exists.  It maps, in this order:
- *   1. every MMIO window below the DRAM base (device-nGnRnE, RW),
- *   2. every RAM range the runtime DT declares (write-back, RW),
- *   3. the packed payload window [payload_base, payload_end) (write-back, RW),
+ *   1. low peripheral space excluding no-map pools (device-nGnRnE, RW),
+ *   2. low RAM excluding page-rounded no-map reservations (write-back, RW),
+ *   3. the packed payload window, rejecting no-map conflicts (write-back, RW),
  *   4. the running image (write-back, RWX),
- *   5. the runtime DT, if it falls outside every RAM range (write-back, RW).
- * The framebuffer is deliberately not mapped here: start_menu() adds the
- * exact scanout and UI-scratch ranges once the panel is known.  Everything is
- * derived from the runtime load base recorded by startup.S, because the
- * attached shim does not run at its link address. */
+ *   5. the external runtime DT (write-back, RW, registered for cache clean),
+ *   6. the display reservation and configured test scratch (non-cacheable).
+ * Final memory types are chosen before enabling; live tables are immutable.
+ * HCR_EL2 is preserved. Unsupported VHE entries decline early enable. */
 typedef struct {
     const void *fdt;
     uint64_t payload_base;
@@ -56,10 +56,13 @@ typedef struct {
 } kshim_mmu_early_config_t;
 
 int kshim_mmu_configure_early(const kshim_mmu_early_config_t *config);
-/* Map or overwrite a range while the MMU is already running.  The range is
- * recorded so a later kshim_mmu_prepare_handoff() flushes it. */
+/* Add a compatible region before the first enable. Returns -2 once tables
+ * have been used by any CPU; online descriptor replacement is unsupported. */
 int kshim_mmu_add_region(uint64_t base, uint64_t size,
                          kshim_mmu_memory_type_t type, uint32_t permissions);
+/* Inspect existing attributes without modifying a live table. */
+int kshim_mmu_region_matches(uint64_t base, uint64_t size,
+                             kshim_mmu_memory_type_t type, uint32_t permissions);
 
 int kshim_mmu_enable_current_cpu(void);
 int kshim_mmu_enable_secondary(uint64_t entry_el);

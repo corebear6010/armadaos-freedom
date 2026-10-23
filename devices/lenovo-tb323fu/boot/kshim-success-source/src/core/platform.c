@@ -476,19 +476,16 @@ static int start_menu(const void *fdt)
         .bpp = kshim_fb_format_bpp(CONFIG_KSHIM_FB_FORMAT), .foreground = UINT32_MAX};
     r->framebuffer = config;
 #endif
-    /* The panel reservation is declared no-map, so it must never be accessed
-     * through a write-back alias: render into it non-cacheable.  With early
-     * translation the RAM ranges are already mapped write-back, hence the
-     * overwrite. */
-    if (kshim_mmu_is_enabled() != 0 && config.render_address != 0U) {
-        uint64_t bytes = config.buffer_size ? config.buffer_size :
-            (uint64_t)(config.stride ? config.stride :
-                (uint64_t)config.width * config.bpp / 8U) * config.height;
-        if (bytes != 0U)
-            (void)kshim_mmu_add_region(config.render_address, bytes,
-                                       KSHIM_MMU_NORMAL_NC,
-                                       KSHIM_MMU_READ | KSHIM_MMU_WRITE);
-    }
+    /* Early tables already map the complete display reservation NC. The
+     * fallback builder likewise chooses final attributes before enabling. */
+    uint64_t framebuffer_bytes = config.buffer_size ? config.buffer_size :
+        (uint64_t)(config.stride ? config.stride :
+            (uint64_t)config.width * config.bpp / 8U) * config.height;
+    if (kshim_mmu_is_enabled() &&
+        !kshim_mmu_region_matches(config.render_address, framebuffer_bytes,
+                                  KSHIM_MMU_NORMAL_NC,
+                                  KSHIM_MMU_READ | KSHIM_MMU_WRITE))
+        return -1;
     if (!config.render_address || kshim_fb_init(&Framebuffer, &config)) return -1;
     int keys = build_keys(fdt);
 #if CONFIG_KSHIM_SMP
@@ -501,12 +498,16 @@ static int start_menu(const void *fdt)
         (kshim_mmu_root_table() || kshim_mmu_configure_default(fdt) == 0))
         (void)kshim_mmu_enable_current_cpu();
     kshim_boot_metrics_record_once(KSHIM_BOOT_STAGE_MMU);
-    /* The UI scratch sits in the same no-map display reservation; map it
-     * non-cacheable before LVGL writes its fonts and background there. */
-    if (kshim_mmu_is_enabled() != 0 && r->ui_scratch.size != 0U)
-        (void)kshim_mmu_add_region(r->ui_scratch.base, r->ui_scratch.size,
-                                   KSHIM_MMU_NORMAL_NC,
-                                   KSHIM_MMU_READ | KSHIM_MMU_WRITE);
+    /* A malformed/custom scratch setting must not turn an excluded no-map
+     * pool into an unchecked pointer. A missing scratch falls back to fonts. */
+    if (kshim_mmu_is_enabled() && r->ui_scratch.size != 0U &&
+        !kshim_mmu_region_matches(r->ui_scratch.base, r->ui_scratch.size,
+                                  KSHIM_MMU_NORMAL_NC,
+                                  KSHIM_MMU_READ | KSHIM_MMU_WRITE) &&
+        !kshim_mmu_region_matches(r->ui_scratch.base, r->ui_scratch.size,
+                                  KSHIM_MMU_NORMAL_WB,
+                                  KSHIM_MMU_READ | KSHIM_MMU_WRITE))
+        r->ui_scratch = (struct dt_range){0};
     kshim_lvgl_set_scratch((void *)(uintptr_t)r->ui_scratch.base,
                            (size_t)r->ui_scratch.size);
 #if CONFIG_KSHIM_DIAGNOSTIC_UI_ONLY && CONFIG_KSHIM_DIAGNOSTIC_KEYS_DESCRIPTORS_ONLY

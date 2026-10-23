@@ -377,21 +377,20 @@ int kshim_main(
         runtime_fdt = NULL;
         device_tree_address = 0;
     }
-    /* Turn translation on before anything else touches memory.  Up to this
-     * point every fetch, load and store runs uncached and strictly ordered,
-     * which on this platform costs tens of seconds before the menu appears.
-     * kshim_mmu_configure_early() verifies the runtime load base against the
-     * image header first, and a rejected configuration leaves the context
-     * exactly as it was, so translation simply stays off and the previous
-     * behaviour is preserved. */
+#if !KSHIM_DIAGNOSTIC_BASE_ONLY && !KSHIM_DIAGNOSTIC_DT_ONLY && \
+    !KSHIM_DIAGNOSTIC_RESOURCES_ONLY && !KSHIM_RAMOOPS_RECOVERY_ONLY
+    /* Direct diagnostic entries keep their MMU-off contract. Ordinary menu
+     * boots enable caching before the expensive DT and resource work. */
     const kshim_mmu_early_config_t early_mmu = {
         .fdt = runtime_fdt,
         .payload_base = linux_base,
-        .payload_end = (manifest_address != 0U && manifest_size != 0U)
+        .payload_end = (manifest_address != 0U && manifest_size != 0U &&
+                        manifest_address <= UINT64_MAX - manifest_size)
             ? manifest_address + manifest_size : 0U,
     };
     const int early_mmu_status = kshim_mmu_configure_early(&early_mmu);
     kshim_boot_metrics_set_mmu(kshim_mmu_is_enabled() ? 1U : 0U, early_mmu_status);
+#endif
     /* Read-only device info from the already validated runtime DT, collected
      * once here and handed to the menu. A NULL runtime FDT stays all-unknown;
      * there is no extra FDT probing or validation path. */
@@ -684,6 +683,10 @@ int kshim_main(
 
         uint32_t selected_index = select_image(&view, device_tree_address, linux_base,
                                                &device_info);
+        /* GUI selection already tears down translation, but a serial-only
+         * menu may leave early tables live. Payload copies and DT overlays
+         * below are not part of the early WB cache-clean registry. */
+        (void)kshim_mmu_prepare_handoff();
         kshim_boot_metrics_record_once(KSHIM_BOOT_STAGE_HANDOFF);
         const MANIFEST_ENTRY *entry = view.entries[selected_index];
         if ((entry->flags & MF_ENTRY_FLAG_BASE_IMAGE) &&
