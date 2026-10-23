@@ -62,7 +62,7 @@ for name in ("PROTON_USE_WINED3D", "PROTON_USE_WOW64"):
     assert [option["data"] for option in preset["options"]] == ["1", "0"], name
 
 os.environ["ARMADA_GAME_TWEAKS_LIB"] = str(root / "system_files/usr/lib/armada")
-sys.path.insert(0, str(root / "decky/armada-control/py_modules"))
+sys.path.insert(0, str(root / "decky/freedom-control/decky/armada-control/py_modules"))
 from armada_control import tweaks  # noqa: E402
 
 missing = work / "absent.json"
