@@ -18,7 +18,7 @@ loader = importlib.machinery.SourceFileLoader(
 spec = importlib.util.spec_from_loader(loader.name, loader)
 control = importlib.util.module_from_spec(spec)
 loader.exec_module(control)
-sys.path.insert(0, str(ROOT / "decky/armada-control/py_modules"))
+sys.path.insert(0, str(ROOT / "decky/freedom-control/decky/armada-control/py_modules"))
 from armada_control import system as plugin_system
 
 

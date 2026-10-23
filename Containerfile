@@ -85,10 +85,10 @@ FROM ${UMTP_RESPONDER_REF} AS umtp-responder
 FROM ${KSHIM_TOOLS_REF} AS kshim-tools
 
 FROM docker.io/library/node:22-slim AS decky-build
-WORKDIR /build/armada-control
-COPY decky/armada-control/package.json decky/armada-control/package-lock.json ./
+WORKDIR /build/freedom-control
+COPY decky/freedom-control/decky/armada-control/package.json decky/freedom-control/decky/armada-control/package-lock.json ./
 RUN npm ci
-COPY decky/armada-control/ ./
+COPY decky/freedom-control/decky/armada-control/ ./
 RUN npm test && npm run build
 WORKDIR /build/armada-store
 COPY decky/armada-store/package.json decky/armada-store/package-lock.json ./
@@ -100,6 +100,11 @@ FROM scratch AS ctx
 COPY build_files /build_files/
 COPY decky /decky/
 COPY system_files /system_files/
+# Selected SM8850 companions come from Freedom Control; shared defaults and
+# performance helpers remain owned by this repository.
+COPY decky/freedom-control/system_files/usr/libexec/armada/armada-powerd /system_files/usr/libexec/armada/armada-powerd
+COPY decky/freedom-control/system_files/usr/lib/armada/devices/lenovo-tb323fu.conf /system_files/usr/lib/armada/devices/lenovo-tb323fu.conf
+COPY decky/freedom-control/system_files/usr/share/armada/power-profiles-SM8850.conf /system_files/usr/share/armada/power-profiles-SM8850.conf
 
 FROM ${BASE_IMAGE} AS armada-rootfs
 ARG ARMADA_VERSION=unknown
@@ -132,7 +137,7 @@ RUN --mount=type=bind,from=ctx,source=/,target=/ctx \
     --mount=type=bind,from=armada-rgb,source=/rpms,target=/packages/armada-rgb \
     --mount=type=bind,from=umtp-responder,source=/rpms,target=/packages/umtp-responder \
     --mount=type=bind,from=kshim-tools,source=/kshim-tools,target=/packages/kshim-tools \
-    --mount=type=bind,from=decky-build,source=/build/armada-control/dist,target=/packages/decky-dist \
+    --mount=type=bind,from=decky-build,source=/build/freedom-control/dist,target=/packages/decky-dist \
     --mount=type=bind,from=decky-build,source=/build/armada-store/dist,target=/packages/decky-store-dist \
     --mount=type=cache,dst=/var/cache \
     --mount=type=cache,dst=/var/log \

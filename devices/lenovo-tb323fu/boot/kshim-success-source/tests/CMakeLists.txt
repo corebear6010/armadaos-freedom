@@ -129,6 +129,10 @@ target_compile_definitions(dt_test PRIVATE "GENERATED_FIXTURES=\"${CMAKE_CURRENT
 kshim_test(mmu_test mmu_test.c "${KSHIM_ROOT}/src/arch/arm64/mmu.c")
 target_include_directories(mmu_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(mmu_test PRIVATE kshim_dt)
+kshim_test(mmu_early_test mmu_early_test.c "${KSHIM_ROOT}/src/ui/framebuffer.c")
+target_include_directories(mmu_early_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_compile_definitions(mmu_early_test PRIVATE CONFIG_KSHIM_FRAMEBUFFER=1)
+target_link_libraries(mmu_early_test PRIVATE kshim_dt)
 
 set(KSHIM_TEST_MENU_SCALE_Q8 "0" CACHE STRING "Theme design scale; 0=automatic")
 option(KSHIM_TEST_MENU_REDUCED_EFFECTS "Reduce theme drawing effects" OFF)

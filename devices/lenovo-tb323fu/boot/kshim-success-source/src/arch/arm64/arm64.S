@@ -14,6 +14,62 @@ ASM_FUNC(arm64_read_mmfr0_el1)
     mrs x0, id_aa64mmfr0_el1
     ret
 
+/* x0: EL, x1: kshim_mmu_region_t array, x2: count. Keep the final cache
+ * clean and SCTLR transition stackless: C spills after a clean would leave
+ * dirty stack lines behind when the caller resumes uncached. */
+ASM_FUNC(arm64_mmu_clean_disable)
+    msr daifset, #0xf
+    mrs x3, ctr_el0
+    ubfx x3, x3, #16, #4
+    mov x4, #4
+    lsl x3, x4, x3
+    sub x4, x3, #1
+1:
+    cbz x2, 4f
+    ldp x5, x6, [x1]
+    ldr w7, [x1, #16]
+    ldr w8, [x1, #20]
+    add x1, x1, #24
+    sub x2, x2, #1
+    cbnz w7, 1b                 // only Normal WB
+    tbz w8, #1, 1b             // only writable regions
+    cbz x6, 1b
+    adds x6, x5, x6
+    b.cs 1b
+    bic x5, x5, x4
+2:
+    dc civac, x5
+    add x5, x5, x3
+    cmp x5, x6
+    b.lo 2b
+    b 1b
+4:
+    dsb sy
+    ic iallu
+    dsb sy
+    isb
+    mov x4, #0x1005            // SCTLR M, C, I
+    cmp x0, #4
+    b.eq 5f
+    cmp x0, #8
+    b.ne 6f
+    mrs x3, sctlr_el2
+    bic x3, x3, x4
+    msr sctlr_el2, x3
+    isb
+    tlbi alle2
+    b 6f
+5:
+    mrs x3, sctlr_el1
+    bic x3, x3, x4
+    msr sctlr_el1, x3
+    isb
+    tlbi vmalle1
+6:
+    dsb sy
+    isb
+    ret
+
 
 // Enable interrupts
 // void arm64_enable_interrupts(void)

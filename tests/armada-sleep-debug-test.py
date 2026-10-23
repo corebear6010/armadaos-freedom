@@ -13,8 +13,8 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 LIB = Path(os.environ.get('ARMADA_SLEEP_DEBUG_TEST_LIB', ROOT / 'system_files/usr/lib/armada/armada_sleep_debug.py'))
-HOOK = Path(os.environ.get('ARMADA_SLEEP_DEBUG_TEST_HOOK', ROOT / 'decky/armada-control/py_modules/armada_control/sleep_debug_hook.sh'))
-PLUGIN = Path(os.environ.get('ARMADA_SLEEP_DEBUG_TEST_PLUGIN', ROOT / 'decky/armada-control/py_modules/armada_control/system.py'))
+HOOK = Path(os.environ.get('ARMADA_SLEEP_DEBUG_TEST_HOOK', ROOT / 'decky/freedom-control/decky/armada-control/py_modules/armada_control/sleep_debug_hook.sh'))
+PLUGIN = Path(os.environ.get('ARMADA_SLEEP_DEBUG_TEST_PLUGIN', ROOT / 'decky/freedom-control/decky/armada-control/py_modules/armada_control/system.py'))
 PUBLIC_ROOT = Path(os.environ.get('ARMADA_SLEEP_DEBUG_TEST_ROOT', ROOT))
 spec = importlib.util.spec_from_file_location('sleep_debug', LIB)
 debug = importlib.util.module_from_spec(spec)
@@ -752,7 +752,7 @@ with patch.object(Path, 'mkdir', mkdir), patch.object(d, 'trace_remove', shutil.
         self.assertIn('collect-report ' + self.cycle, (self.root / 'runner').read_text())
 
     def test_plugin_migrates_existing_success_only_hook(self):
-        sys.path.insert(0, str(PUBLIC_ROOT / 'decky/armada-control/py_modules'))
+        sys.path.insert(0, str(PUBLIC_ROOT / 'decky/freedom-control/decky/armada-control/py_modules'))
         spec = importlib.util.spec_from_file_location('armada_control.system_review', PLUGIN)
         plugin = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(plugin)

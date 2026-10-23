@@ -15,7 +15,7 @@ root = pathlib.Path(sys.argv[1])
 work = pathlib.Path(sys.argv[2])
 spec = importlib.util.spec_from_file_location(
     "armada_control_steam",
-    root / "decky/armada-control/py_modules/armada_control/steam.py",
+    root / "decky/freedom-control/decky/armada-control/py_modules/armada_control/steam.py",
 )
 steam = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(steam)

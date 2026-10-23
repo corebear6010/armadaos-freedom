@@ -25,10 +25,19 @@
 | Project-Aloha/CrDK | `b6c3335136b7f6b28271917de11e8f11982975fc` |
 | picolibc/picolibc | `f7edb0869e64b9d687f46961adeef7154921fe92` |
 | lvgl/lvgl | `7f07a129e8d77f4984fff8e623fd5be18ff42e74` |
+| libfdt 恢复目录 | [sunflower2333/kShimC](https://github.com/sunflower2333/kShimC) 的 `82ce6eaa10c36e64cfd3f16799172d854f9a955b`，仅取 `lib/libfdt` |
 | 打包器上游基线 | `2276163d066596cb0750e76cbfeec5c193b1779f` |
 | 打包器本地基线 | `aa819b0d1be76e83256f64cf77c0f6dfe4174eea`，另需 `patches/boot/` 中的共享 PayloadFrom 修改 |
 
-CrDK 需要 `ports/crdk/` 的补丁层。源码归档不包含顶层 `lib/`、`third_party/`、`.git/`；`lib/libfdt` 和 `libfdt_env.h` 也需单独准备，现有 `.gitmodules` 不足以自动还原全部依赖。对应入口见[四代引导说明](../../lenovo-tb322fc/boot/README.md)和[五代引导说明](../boot/star-chart-build/README.md)，系统内工具来源见 [kshim-tools](../../../packages/kshim-tools/README.md)。
+CrDK 需要 `ports/crdk/` 的补丁层。源码归档不包含顶层 `lib/`、`third_party/`、`.git/`，现有 `.gitmodules` 不足以自动还原全部依赖。三个 Git 依赖与 `lib/libfdt` 的恢复命令、版本核对和校验统一见[共享依赖准备指引](../boot/kshim-success-source/DEPENDENCIES.md)。对应入口见[四代引导说明](../../lenovo-tb322fc/boot/README.md)和[五代引导说明](../boot/star-chart-build/README.md)，系统内工具来源见 [kshim-tools](../../../packages/kshim-tools/README.md)。
+
+### libfdt 恢复基线
+
+`lib/libfdt` 按公开 `sunflower2333/kShimC` 的固定提交 `82ce6eaa10c36e64cfd3f16799172d854f9a955b` 单独恢复，只取该提交下的 `lib/libfdt`。这是经历史实物比对选定的 libfdt 恢复来源，不是整个 Freedom STAR_CHART 快照的原始提交；不要据此声称该提交对应本快照，也不要把当前上游源码整体覆盖到本快照。
+
+该目录包含 `include/libfdt_env.h`，它是配套的 kShim freestanding 适配头。公开版本缺少历史构建适配的一行 `#include <stdlib.h>`，恢复后需在 `#include <stdint.h>` 之后补上；适配后的 LF 文件 SHA-256 为 `132cb14b8f0b323e5701d4bfcb0ebba4b1f35726bfdfa6739f18ad638d20e582`。完整的导出、`sed` 与 `sha256sum -c` 校验步骤见[共享依赖准备指引](../boot/kshim-success-source/DEPENDENCIES.md)。
+
+恢复后的 `lib/libfdt/UPSTREAM-check.json` 只记录 dtc v1.7.0 的 `fdt_check.c` 校验，不能据此认为整个目录原样来自 dtc v1.7.0。顶层 CMake 直接编译 `lib/libfdt` 下的源码并引用其 `include/` 头目录，构建不需要另装系统 dtc 头。
 
 `patches/boot/kshim-local-commits.mbox` 是旧阶段的增量记录，不是当前 STAR 快照的完整补丁集，不能无条件重复应用。Android payload、原厂 boot、分区备份及构建生成的镜像不随仓库分发。
 

@@ -192,7 +192,7 @@ for request in invalid_requests:
     else:
         raise AssertionError("invalid RGB state was accepted")
 
-sys.path.insert(0, str(root / "decky/armada-control/py_modules"))
+sys.path.insert(0, str(root / "decky/freedom-control/decky/armada-control/py_modules"))
 from armada_control import rgb
 
 # The Python RGB wrapper reports unsupported devices when its privileged call fails.
