@@ -86,6 +86,9 @@ static struct {
     int pending, psci_result, ui_init_result, entries_result;
     int64_t reset_result, off_result;
     unsigned init_calls, entries_calls, entries_fail_at, frames, deinit_calls, handoff_calls;
+    bool framebuffer_unmapped, scratch_unmapped, scratch_wb_only;
+    void *scratch_base;
+    size_t scratch_size;
     unsigned psci_calls, reset_calls, off_calls, countdown_zero, countdown_started, status_calls;
     unsigned fb_calls, keys_build_calls;
     unsigned keys_adapter_calls, keys_begin_calls, keys_end_calls;
@@ -348,10 +351,21 @@ int kshim_mmu_is_enabled(void) { return 1; }
 uint64_t kshim_mmu_root_table(void) { return 1; }
 int kshim_mmu_configure_default(const void *fdt) { (void)fdt; return 0; }
 int kshim_mmu_enable_current_cpu(void) { return 0; }
+int kshim_mmu_region_matches(uint64_t base, uint64_t size,
+                             kshim_mmu_memory_type_t type, uint32_t permissions)
+{
+    (void)size; (void)permissions;
+    if (base == h.resources.framebuffer.render_address)
+        return !h.framebuffer_unmapped;
+    if (base == h.resources.ui_scratch.base)
+        return !h.scratch_unmapped && (!h.scratch_wb_only || type == KSHIM_MMU_NORMAL_WB);
+    return 1;
+}
 int kshim_mmu_prepare_handoff(void) { ++h.handoff_calls; return h.handoff_result; }
 void kshim_boot_set_args(uint64_t fdt, uint64_t a, uint64_t b, uint64_t c)
 { (void)fdt; (void)a; (void)b; (void)c; }
-void kshim_lvgl_set_scratch(void *base, size_t size) { (void)base; (void)size; }
+void kshim_lvgl_set_scratch(void *base, size_t size)
+{ h.scratch_base = base; h.scratch_size = size; }
 int kshim_lvgl_init(kshim_lvgl_t *context, kshim_framebuffer_t *fb, QcomKeys *keys)
 {
     (void)fb; (void)keys;
@@ -2998,8 +3012,32 @@ static void test_settings_internal_tf_default_timeout(void)
 
 #endif /* KSHIM_SETTINGS_MENU_TESTS */
 
+static void test_mmu_mapping_guards(void)
+{
+    setup(false, 2);
+    h.framebuffer_unmapped = true;
+    assert(start_menu((const void *)(uintptr_t)boot_fdt()) == -1);
+    assert(h.fb_calls == 0 && h.init_calls == 0);
+
+    setup(false, 2);
+    h.resources.ui_scratch = (struct dt_range){0x30000000, 0x10000};
+    h.scratch_unmapped = true;
+    assert(start_menu((const void *)(uintptr_t)boot_fdt()) == 0);
+    assert(h.resources.ui_scratch.size == 0);
+    assert(h.scratch_base == NULL && h.scratch_size == 0);
+    assert(kshim_platform_prepare_handoff() == 0);
+
+    setup(false, 2);
+    h.resources.ui_scratch = (struct dt_range){0x30000000, 0x10000};
+    h.scratch_wb_only = true;
+    assert(start_menu((const void *)(uintptr_t)boot_fdt()) == 0);
+    assert(h.scratch_base == (void *)(uintptr_t)0x30000000 && h.scratch_size == 0x10000);
+    assert(kshim_platform_prepare_handoff() == 0);
+}
+
 int main(void)
 {
+    test_mmu_mapping_guards();
 #if CONFIG_KSHIM_MENU_LANGUAGE_SWITCH
     test_language_page_switch();
     test_language_page_navigation();

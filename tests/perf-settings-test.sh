@@ -16,7 +16,7 @@ trap 'rm -rf "$WORK"' EXIT
 
 # Pin the tweaks key published by the plugin for the session consumer.
 grep -Fq 'nextTweaks.global.gamescopeVulkanRealtime = on' \
-    "$ROOT/decky/armada-control/src/tabs/Compatibility.tsx" || {
+    "$ROOT/decky/freedom-control/decky/armada-control/src/tabs/Compatibility.tsx" || {
     printf 'FAIL: plugin no longer writes global.gamescopeVulkanRealtime\n' >&2
     exit 1
 }
@@ -543,6 +543,7 @@ factory = os.path.join(ROOT, "system_files/usr/share/armada/power-profiles.conf"
 powerd.FACTORY_CONFIG_FILE = powerd.Path(factory)
 powerd.CONFIG_FILE = powerd.Path(os.path.join(WORK, "no-such-etc.conf"))
 power = powerd.ArmadaPower.__new__(powerd.ArmadaPower)
+power.env = {}
 parsed = power.parse_config()
 (default_profile, underclocks, fan_curves, profile_config, fan_config,
  suspend_config, system_config) = parsed
@@ -804,7 +805,7 @@ finally:
 check("perf_tick contains exceptions", True)
 
 # --- plugin: tweaks sanitize keeps the flat perf keys -----------------------
-sys.path.insert(0, os.path.join(ROOT, "decky/armada-control/py_modules"))
+sys.path.insert(0, os.path.join(ROOT, "decky/freedom-control/decky/armada-control/py_modules"))
 from armada_control import tweaks as plugin_tweaks
 
 gt.OVERRIDES_CONFIG = pathlib.Path(WORK) / "missing-plugin-tweaks.json"
@@ -889,7 +890,7 @@ finally:
     plugin_tweaks.call = real_plugin_call
 
 # --- plugin: power render with editable governor ----------------------------
-sys.path.insert(0, os.path.join(ROOT, "decky/armada-control/py_modules"))
+sys.path.insert(0, os.path.join(ROOT, "decky/freedom-control/decky/armada-control/py_modules"))
 from armada_control import power as plugin_power
 
 plugin_power.FACTORY_POWER_CONFIG = plugin_power.Path(factory)

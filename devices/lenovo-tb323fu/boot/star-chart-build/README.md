@@ -27,7 +27,7 @@
 
 ## 依赖
 
-恢复固定版本的 CrDK、picolibc 和 LVGL，并应用源码内 `ports/crdk/` 补丁层。`lib/libfdt` 和 `libfdt_env.h` 需单独准备；仅初始化 `.gitmodules` 中的子模块并不足够。打包需要配套 MultiBootKernelPatcher/UnpackTool 和 `patches/boot/` 的本地变更，具体版本见来源文档。
+依赖恢复的完整步骤、固定版本、`libfdt_env.h` 适配与校验以[共享依赖准备指引](../kshim-success-source/DEPENDENCIES.md)为准：需要 CrDK、picolibc、LVGL 三个固定版本依赖（CrDK 必须保留带 `.git` 的独立仓库），并单独取回 `lib/libfdt`（含 `include/libfdt_env.h`）。`ports/crdk/` 补丁由 CMake 调用 `prepare.py` 校验并应用到构建目录副本，不要手工给原始依赖打补丁。仅初始化 `.gitmodules` 中的子模块并不足够。打包需要配套 MultiBootKernelPatcher/UnpackTool 和 `patches/boot/` 的本地变更，具体版本见来源文档。
 
 源码快照不包含顶层 `.git/`、`lib/` 和 `third_party/`。这不包括 `src/` 内同名的源码子目录，不能一并删除。
 

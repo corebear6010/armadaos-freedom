@@ -37,6 +37,13 @@ int main(void)
     assert(kshim_mmu_configure(&config));
     maps[2].type=KSHIM_MMU_NORMAL_NC;
     assert(!kshim_mmu_configure(&config)); /* Explicit consumer mapping only. */
+    assert(kshim_mmu_region_matches((uint64_t)(uintptr_t)tree, fdt_totalsize(tree),
+        KSHIM_MMU_NORMAL_WB, KSHIM_MMU_READ | KSHIM_MMU_WRITE));
+    assert(!kshim_mmu_is_enabled());
+    assert(!kshim_mmu_add_region(0x87000000, 0x1000, KSHIM_MMU_NORMAL_NC,
+        KSHIM_MMU_READ | KSHIM_MMU_WRITE));
+    assert(kshim_mmu_region_matches(0x87000000, 0x1000, KSHIM_MMU_NORMAL_NC,
+        KSHIM_MMU_READ | KSHIM_MMU_WRITE));
     assert(!kshim_mmu_prepare_handoff());
     puts("MMU page reuse, resource types, reservations and unmapped RAM passed");
 }

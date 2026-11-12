@@ -1,9 +1,11 @@
 #!/bin/bash
 set -euxo pipefail
 
-# Copy dist from the image build stage, not the source tree.
+# Copy dist from the image build stage, not the source tree. The destination
+# keeps the historical armada-control directory name; the source defaults to the
+# in-tree plugin and can be overridden for dependency-owned sources.
 install_plugin() {
-    local name=$1 dist=$2 src=/ctx/decky/$1 dest=/usr/share/decky-plugins/$1
+    local name=$1 dist=$2 src=${3:-/ctx/decky/$1} dest=/usr/share/decky-plugins/$1
     install -d -m 0755 "${dest}"
     cp -a "${src}/plugin.json" "${src}/package.json" "${src}/main.py" "${dest}/"
     cp -a "${src}/py_modules" "${dest}/"
@@ -13,7 +15,7 @@ install_plugin() {
     rm -f "${dest}/dist/"*.map
     find "${dest}" -name __pycache__ -type d -prune -exec rm -rf {} +
 }
-install_plugin armada-control /packages/decky-dist
+install_plugin armada-control /packages/decky-dist /ctx/decky/freedom-control/decky/armada-control
 install_plugin armada-store /packages/decky-store-dist
 chmod 0755 /usr/lib/decky-loader/armada-decky-sync
 

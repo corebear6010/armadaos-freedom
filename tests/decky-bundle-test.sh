@@ -264,6 +264,19 @@ setup_case() {
         printf 'main:%s\n' "$plugin" >"$FAKE/ctx/decky/$plugin/main.py"
         printf 'module:%s\n' "$plugin" >"$FAKE/ctx/decky/$plugin/py_modules/__init__.py"
     done
+
+    # Synced upstream source: the Freedom Control dependency now provides the
+    # armada-control plugin at ctx/decky/freedom-control/decky/armada-control.
+    # Its markers are unique. The legacy ctx/decky/armada-control fixture above
+    # is kept unchanged so an installer that still copies it keeps running and
+    # fails only the freedom-control comparisons in success_case.
+    local fc="$FAKE/ctx/decky/freedom-control/decky/armada-control"
+    mkdir -p "$fc/py_modules"
+    printf '{"name":"Freedom Control"}\n' >"$fc/plugin.json"
+    printf '{"name":"freedom-control","version":"1.0.0"}\n' >"$fc/package.json"
+    printf 'main:freedom-control\n' >"$fc/main.py"
+    printf 'module:freedom-control\n' >"$fc/py_modules/__init__.py"
+
     for dist in decky-dist decky-store-dist; do
         mkdir -p "$FAKE/packages/$dist"
         printf 'js:%s\n' "$dist" >"$FAKE/packages/$dist/index.js"
@@ -341,6 +354,26 @@ success_case() {
         done
         assert_absent "$FAKE/usr/share/decky-plugins/$plugin/dist/index.js.map"
     done
+
+    # The installed armada-control must be bundled from the Freedom Control
+    # dependency source, not the legacy ctx/decky/armada-control tree.
+    local fc_src="$FAKE/ctx/decky/freedom-control/decky/armada-control"
+    local installed="$FAKE/usr/share/decky-plugins/armada-control"
+    local fc_rel
+    for fc_rel in plugin.json package.json main.py py_modules/__init__.py; do
+        if [[ ! -f "$installed/$fc_rel" ]]; then
+            case_fail "missing installed armada-control/$fc_rel"
+        elif ! cmp -s "$fc_src/$fc_rel" "$installed/$fc_rel"; then
+            case_fail "installed armada-control/$fc_rel is not from the freedom-control source"
+        fi
+    done
+    if [[ -f "$installed/plugin.json" ]] &&
+        ! grep -qE '"name"[[:space:]]*:[[:space:]]*"Freedom Control"' "$installed/plugin.json"; then
+        case_fail "installed armada-control plugin.json does not name Freedom Control"
+    fi
+    # Keep the installed directory name armada-control for runtime/settings
+    # compatibility: no parallel freedom-control destination may appear.
+    assert_absent "$FAKE/usr/share/decky-plugins/freedom-control"
 
     local downloads
     downloads=$(grep -c '/releases/download/' "$CURL_LOG" || true)

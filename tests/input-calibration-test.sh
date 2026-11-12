@@ -17,7 +17,7 @@ import sys
 
 root = Path(sys.argv[1])
 work = Path(sys.argv[2])
-sys.path.insert(0, str(root / "decky/armada-control/py_modules"))
+sys.path.insert(0, str(root / "decky/freedom-control/decky/armada-control/py_modules"))
 sys.path.insert(0, str(root / "system_files/usr/lib/armada"))
 
 from armada_control import calibration

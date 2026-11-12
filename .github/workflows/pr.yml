@@ -38,6 +38,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
+          submodules: recursive
 
       - name: Install skopeo
         run: command -v skopeo >/dev/null || { sudo apt-get update && sudo apt-get install -y skopeo; }
@@ -114,6 +115,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
+          submodules: recursive
 
       - name: Install container tools
         run: |
@@ -201,6 +203,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
+          submodules: recursive
 
       - name: Install container tools
         run: |
