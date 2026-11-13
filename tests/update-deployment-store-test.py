@@ -39,6 +39,21 @@ def run(*args: str) -> str:
         ) from exc
 
 
+def cleanup_tmpdir(tmp: tempfile.TemporaryDirectory) -> None:
+    # OSTree marks deployment trees immutable. Clear those flags before
+    # TemporaryDirectory attempts to remove its fixture.
+    try:
+        subprocess.run(
+            ["chattr", "-R", "-i", tmp.name],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError:
+        pass
+    tmp.cleanup()
+
+
 def binding(dep) -> str:
     return (
         f"{dep.get_osname()}/{dep.get_csum()}."
@@ -75,7 +90,7 @@ class DeploymentStoreIntegrationTests(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory(
             prefix="deployment-store-", dir=os.environ.get("TMPDIR")
         )
-        self.addCleanup(tmp.cleanup)
+        self.addCleanup(cleanup_tmpdir, tmp)
         self.root = Path(tmp.name) / "sysroot"
         self.root.mkdir()
         run("ostree", "admin", "init-fs", "--modern", str(self.root))
