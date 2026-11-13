@@ -177,7 +177,9 @@ assert_no_target beta \
 )
 
 UPDATE="$ROOT/system_files/usr/libexec/armada/armada-update"
-grep -Fq 'if armada_steam_channels_apply "$repository" "$desired"; then' "$UPDATE"
+grep -Fq 'exec /usr/bin/python3 -m updates.legacy_cli "$@"' "$UPDATE"
+grep -Fq 'client.run("system", "update"' \
+    "$ROOT/system_files/usr/lib/armada/updates/legacy_cli.py"
 
 python3 - "$ROOT" <<'PY'
 import json
