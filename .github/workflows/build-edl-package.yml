@@ -117,7 +117,7 @@ jobs:
           python3 -m unittest discover -s tests -p test_edl_boot_requirements.py
           python3 -m unittest discover -s tests -p test_tb322fc_bluetooth.py
           python3 -m unittest discover -s tests -p test_initramfs_requirement_failure.py
-          python3 -m unittest discover -s tests -p 'test_update_*.py'
+          sudo env PYTHONDONTWRITEBYTECODE=1 TMPDIR="$RUNNER_TEMP" python3 -m unittest discover -s tests -p 'test_update_*.py'
           TMPDIR="$RUNNER_TEMP" python3 tests/armada-reboot-edl-test.py
 
       - name: Check signing key

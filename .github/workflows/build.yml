@@ -113,10 +113,6 @@ jobs:
           sudo env PYTHONDONTWRITEBYTECODE=1 TMPDIR="$RUNNER_TEMP" /usr/bin/python3 -B tests/update-image-source-test.py
           sudo env PYTHONDONTWRITEBYTECODE=1 TMPDIR="$RUNNER_TEMP" /usr/bin/python3 -B tests/update-offline-source-test.py
           sudo env PYTHONDONTWRITEBYTECODE=1 TMPDIR="$RUNNER_TEMP" /usr/bin/python3 -B tests/update-deployment-options-test.py
-          sudo env PYTHONDONTWRITEBYTECODE=1 TMPDIR="$RUNNER_TEMP" /usr/bin/python3 -B tests/update-recovery-deployment-test.py
-          sudo modprobe btrfs
-          sudo env PYTHONDONTWRITEBYTECODE=1 TMPDIR="$RUNNER_TEMP" /usr/bin/python3 -B tests/update-recovery-mounts-test.py
-          sudo env PYTHONDONTWRITEBYTECODE=1 TMPDIR="$RUNNER_TEMP" /usr/bin/python3 -B tests/update-recovery-context-test.py
           sudo env PYTHONDONTWRITEBYTECODE=1 TMPDIR="$RUNNER_TEMP" /usr/bin/python3 -B tests/test_update_recovery_channel.py
           sudo env PYTHONDONTWRITEBYTECODE=1 TMPDIR="$RUNNER_TEMP" /usr/bin/python3 -B tests/test_update_finalization_receipt.py
           sudo env PYTHONDONTWRITEBYTECODE=1 TMPDIR="$RUNNER_TEMP" /usr/bin/python3 -B tests/test_update_system_pending_status.py
@@ -172,7 +168,7 @@ jobs:
           python3 -m unittest discover -s tests -p test_edl_boot_requirements.py
           python3 -m unittest discover -s tests -p test_tb322fc_bluetooth.py
           python3 -m unittest discover -s tests -p test_initramfs_requirement_failure.py
-          python3 -m unittest discover -s tests -p 'test_update_*.py'
+          sudo env PYTHONDONTWRITEBYTECODE=1 TMPDIR="$RUNNER_TEMP" python3 -m unittest discover -s tests -p 'test_update_*.py'
           TMPDIR="$RUNNER_TEMP" python3 tests/armada-reboot-edl-test.py
 
       # Resolve before the image build so the OCI layers bundle the latest

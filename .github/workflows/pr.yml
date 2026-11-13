@@ -117,7 +117,7 @@ jobs:
         run: |
           bash tests/decky-bundle-test.sh
           python3 -m unittest discover -s tests -p 'test_decky_*.py'
-          python3 -m unittest discover -s tests -p 'test_update_*.py'
+          sudo env PYTHONDONTWRITEBYTECODE=1 TMPDIR="$RUNNER_TEMP" python3 -m unittest discover -s tests -p 'test_update_*.py'
           TMPDIR="$RUNNER_TEMP" python3 tests/armada-reboot-edl-test.py
 
       - name: Check image identity and signing contracts
