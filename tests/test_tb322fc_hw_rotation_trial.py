@@ -33,6 +33,13 @@ class Tb322fcHardwareRotationTrial(unittest.TestCase):
             driver,
         )
 
+        qseed = (
+            ROOT
+            / "packages/kernel/patches"
+            / "0228-drm-msm-dpu-qseed-v11-rotation-boundaries.patch"
+        ).read_text()
+        self.assertIn("+	if (!drm_rotation_90_or_270(cfg->rotation))", qseed)
+
     def test_gamescope_uses_hardware_rotation(self):
         config = (
             ROOT / "system_files/usr/lib/armada/devices/lenovo-tb322fc.conf"
