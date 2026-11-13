@@ -44,7 +44,7 @@ TB322FC_PROFILE = {
         "qcom,canoep",
         "qcom,kaanapali",
     ],
-    "extraArgs": [],
+    "extraArgs": ["msm.dpu_use_virtual_planes=1"],
     "runtimeConfig": "configs/tb322fc_android_defconfig",
     "runtimeCmakeArgs": ["-DKSHIM_TB323FU_ANDROID_TOUCH_4M8_TRIAL=OFF"],
     "bootPartitionBytes": BOOT_PARTITION_BYTES,

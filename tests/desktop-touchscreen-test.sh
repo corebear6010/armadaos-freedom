@@ -126,10 +126,9 @@ assert_eq "$(dt_value ARMADA_DEVICE_ID)" lenovo-tb322fc 'elden compatible device
 assert_eq "$(dt_value ARMADA_DEVICE_NAME)" 'Lenovo Legion Y700 Gen4' 'elden compatible device name'
 assert_eq "$(dt_value ARMADA_SOC_CLASS)" SM8750 'elden compatible soc class'
 assert_eq "$(dt_value ARMADA_PRIMARY_TOUCHSCREEN)" "$TOUCHSCREEN" 'elden compatible touchscreen'
-# Orientation and calibration defaults stay unchanged, but Gen4 uses the
-# accepted rotation shader fallback.
-assert_eq "$(dt_value ARMADA_PANEL_ORIENTATION)" normal 'elden orientation default'
-assert_eq "$(dt_value ARMADA_GAMESCOPE_USE_ROTATION_SHADER)" 1 'elden rotation shader fallback'
+# Gen4 now pairs its 270-degree panel with Gamescope LEFT_UP.
+assert_eq "$(dt_value ARMADA_PANEL_ORIENTATION)" left 'elden hardware orientation'
+assert_eq "$(dt_value ARMADA_GAMESCOPE_USE_ROTATION_SHADER)" 0 'elden hardware rotation'
 assert_eq "$(dt_value ARMADA_DESKTOP_TOUCHSCREEN_CALIBRATION)" '' 'elden calibration empty'
 
 # The exact entry also matches when it is not the first compatible.

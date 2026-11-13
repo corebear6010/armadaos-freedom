@@ -3,7 +3,7 @@ new file mode 100644
 index 0000000..63a2204
 --- /dev/null
 +++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_qseed3_v11.h
-@@ -0,0 +1,109 @@
+@@ -0,0 +1,113 @@
 +/* SPDX-License-Identifier: MIT */
 +#ifndef DPU_HW_QSEED3_V11_H
 +#define DPU_HW_QSEED3_V11_H
@@ -105,7 +105,11 @@ index 0000000..63a2204
 +	out->phase_step = (u32)step;
 +	out->init_phase = (u32)raw & ((1 << 21) - 1);
 +	out->preload = (u32)preload;
-+	out->src_size = (u32)total;
++	/*
++	 * QSEED consumes only the pipe's ROI. Fetch extension is expressed
++	 * separately through the pixel-extension registers.
++	 */
++	out->src_size = (u32)src_len;
 +	out->fetch_before = (s32)before;
 +	out->fetch_after = (s32)after;
 +

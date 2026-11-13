@@ -1,0 +1,14 @@
+[Unit]
+Description=TB322FC late-start Qualcomm ADSP before UPower
+After=local-fs.target systemd-udev-trigger.service
+Before=upower.service
+ConditionPathExists=/usr/lib/firmware/qcom/sm8750/adsp.mdt
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/armada/armada-adsp-late-start
+RemainAfterExit=yes
+TimeoutStartSec=30
+
+[Install]
+WantedBy=multi-user.target

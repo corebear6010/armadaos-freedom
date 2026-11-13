@@ -822,7 +822,7 @@ no equivalent submission was found, or a permanent URL to the upstream submissio
 - `patches/0141-drm-panel-add-nt36536-and-dsc-packet-support.patch`
   source: https://github.com/h0cheung/tb322fc-linux-kernel/commit/6f97250ead155fc3b980856323e99a4623dae73d
   upstream: unknown
-  notes: Literal NT36536 panel plus an opt-in DSC packet flag and its host handling.
+  notes: NT36536 panel plus an opt-in DSC packet flag and its host handling. Armada adds DRM panel-orientation parsing so the elden panel's rotation property reaches the connector instead of being ignored.
 - `patches/0142-drm-msm-elden-dsc12-10bpc.patch`
   source: https://github.com/h0cheung/tb322fc-linux-kernel/commit/6f97250ead155fc3b980856323e99a4623dae73d
   upstream: unknown
@@ -1130,6 +1130,14 @@ no equivalent submission was found, or a permanent URL to the upstream submissio
   source: armadaos-freedom
   upstream: local
   notes: Adds Kaanapali inline-rotation capabilities, DPU 13 ROT90 register programming, catalog-limited split allocation, rotation-aware clock calculation and the no-pre-downscale bound. Existing SoC catalogs retain their limits.
+- `patches/0228-drm-msm-dpu-qseed-v11-rotation-boundaries.patch`
+  source: armadaos-freedom
+  upstream: local
+  notes: Computes per-pipe QSEED V11 phase, preload, source size and pixel extension from whole-plane geometry so adjacent source-split pipes share one sampling grid; includes the Y700 Gen 4 QSEED 3.4 exception. QSEED source size stays at the pipe ROI while fetch expansion remains in pixel extension. The source-split order bit is intentionally handled separately by 0229.
+- `patches/0229-drm-msm-dpu-program-source-split-order.patch`
+  source: armadaos-freedom
+  upstream: local
+  notes: Programs `MDSS_MDP_OP_SPLIT_ORDER` on the right SSPP of a source-split pair and clears it on the left, including shared-plane multirect and independent-SSPP paths. Color-fill and disable clear both OP_MODE records so a reused pipe cannot retain stale split state. The write is gated to DPU 12, matching the SM8750 OEM DT pipe-order contract (`qcom,sde-pipe-order-version = <1>`).
 - `dts/0201-baldur-panel-orientation.patch`
   source: armadaos-freedom
   upstream: local

@@ -2,6 +2,8 @@
 set -euxo pipefail
 
 cp -a /ctx/system_files/. /
+chmod 0755 /usr/libexec/armada/armada-adsp-late-start
+chmod 0644 /usr/lib/systemd/system/armada-adsp-late-start.service
 install -Dpm 0755 /packages/extest/libextest.so /usr/lib/extest/libextest.so
 
 # The vendored entries land after the RPM scriptlets ran, so mimeinfo.cache
@@ -146,6 +148,7 @@ systemctl enable armada-installer-visibility.service
 systemctl enable armada-steamapps.service
 systemctl enable armada-als-bridge.service
 systemctl enable armada-powerd.service
+systemctl enable armada-adsp-late-start.service
 systemctl enable armada-updates.service
 systemctl enable armada-update-confirm.service
 systemctl enable armada-control.service
