@@ -119,7 +119,8 @@ session_orientation() {
 assert_eq "$(session_orientation lenovo-tb323fu)" right 'TB323FU default orientation'
 assert_eq "$(session_orientation lenovo-tb323fu left)" left 'explicit ORIENTATION retained'
 assert_eq "$(session_orientation lenovo-tb323fu '' left)" left 'ARMADA_PANEL_ORIENTATION honored'
-assert_eq "$(session_orientation lenovo-tb322fc)" '<unset>' 'TB322FC leaves orientation unset'
+assert_eq "$(session_orientation lenovo-tb322fc)" left 'TB322FC default orientation'
+assert_eq "$(session_orientation lenovo-tb322fc '' right)" right 'TB322FC panel orientation override honored'
 assert_eq "$(session_orientation unknown-device)" '<unset>' 'unknown device leaves orientation unset'
 
 # --- existing USB routing behavior ------------------------------------------
