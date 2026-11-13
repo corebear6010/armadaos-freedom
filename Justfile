@@ -44,6 +44,12 @@ test:
     python3 -m unittest discover -s tests -p test_plugin_sources.py
     python3 -m unittest discover -s tests -p 'test_decky_*.py'
     python3 -m unittest discover -s tests -p 'test_update_*.py'
+    python3 -m unittest tests/kshim-avb-sign-test.py
+    python3 -m unittest tests/kshim-prepare-test.py
+    python3 -m unittest tests/kshim-sync-test.py
+    python3 -m unittest tests/kshim-state-test.py
+    python3 -m unittest tests/kshim-hooks-test.py
+    python3 -m unittest tests/test_tb322fc_hw_rotation_trial.py
     python3 tests/organization-migration-test.py
     python3 tests/ci-signing-test.py
 

@@ -3,8 +3,9 @@
 """Offline Gen4 TB322FC Linux first-boot packaging driver (Linux, stdlib only).
 
 Drives the external MBKP packer, the supplied UnpackTool, the supplied
-v4 boot repacker (repack_boot_v4.py), gzip and the official avbtool over one
-fixed multi-boot layout and asserts byte-level round-trip correctness.  Two
+v4 boot repacker (repack_boot_v4.py), gzip, the mandatory kshim AVB signer and
+the official avbtool over one fixed multi-boot layout and asserts byte-level
+round-trip and signed-AVB correctness. Two
 layouts are supported: the 5-entry maintenance layout (stock Android,
 maintenance Linux + DTB, initramfs Blob, attached Shim) and the 7-entry
 installed layout (stock Android, internal Linux owner, a diagnostic alias that
@@ -54,6 +55,11 @@ MANIFEST_ENTRY_SIZE = 56
 MANIFEST_ENTRY_ALIGN = 4
 FDT_MAGIC = 0xD00DFEED
 AVB_MAGIC = b"AVBf"
+AVB_ALGORITHM = "SHA256_RSA4096"
+AVB_KEY_PUBLIC_SHA1 = "2597c218aae470a130f61162feaae70afd97f011"
+AVB_RELEASE_STRING = "freedom-edl-direct"
+AVB_SIGNER = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "kshim-avb-sign.py")
 
 MF_TYPE_LINUX = 1
 MF_TYPE_SHIM = 3
@@ -641,6 +647,8 @@ def main():
     parser.add_argument("--unpacker", required=True)
     parser.add_argument("--repacker", required=True)
     parser.add_argument("--avbtool", required=True)
+    parser.add_argument("--avb-key", required=True)
+    parser.add_argument("--avb-signer", default=AVB_SIGNER)
     parser.add_argument("--bootargs")
     parser.add_argument("--installer-result")
     parser.add_argument("--boot-dir")
@@ -701,6 +709,8 @@ def main():
         "unpacker": os.path.abspath(args.unpacker),
         "repacker": os.path.abspath(args.repacker),
         "avbtool": os.path.abspath(args.avbtool),
+        "avb_key": os.path.abspath(args.avb_key),
+        "avb_signer": os.path.abspath(args.avb_signer),
     }
     OUT = os.path.abspath(args.out)
 
@@ -1131,7 +1141,8 @@ def run_driver(inputs, source_label, bootargs, default_entry=None,
     linux_reserved = align_up(len(padded), 4096)
     bss_pad = linux_reserved - len(padded)
 
-    for key in ("packer", "unpacker", "repacker", "avbtool"):
+    for key in ("packer", "unpacker", "repacker", "avbtool",
+                "avb_key", "avb_signer"):
         check("tool:%s" % key, os.path.isfile(inputs[key]), inputs[key])
 
     source_digests = {key: sha256_file(path) for key, path in inputs.items()}
@@ -1567,6 +1578,17 @@ def run_driver(inputs, source_label, bootargs, default_entry=None,
          "--report", repack_report,
          "--avbtool", inputs["avbtool"]], "repacker")
 
+    set_stage("avb-sign")
+    signing_report = os.path.join(OUT, "avb-signing.json")
+    run([sys.executable, "-B", inputs["avb_signer"],
+         "--image", final_boot,
+         "--stock-boot", inputs["stock_boot"],
+         "--avbtool", inputs["avbtool"],
+         "--key", inputs["avb_key"],
+         "--report", signing_report], "avb-signing")
+    with open(signing_report, encoding="utf-8") as handle:
+        signing = json.load(handle)
+
     set_stage("assert-boot")
     final = read_bytes(final_boot, "boot.img")
     final_boot_header = parse_boot_header(final)
@@ -1622,7 +1644,7 @@ def run_driver(inputs, source_label, bootargs, default_entry=None,
     set_stage("avb")
     verify_log = os.path.join(LOGS, "avbtool_verify_image.stdout")
     run([sys.executable, "-B", inputs["avbtool"], "verify_image", "--image",
-         final_boot], "avbtool_verify_image")
+         final_boot, "--key", inputs["avb_key"]], "avbtool_verify_image")
     run([sys.executable, "-B", inputs["avbtool"], "info_image", "--image",
          final_boot], "avbtool_info_image")
     info_log = os.path.join(LOGS, "avbtool_info_image.stdout")
@@ -1631,8 +1653,15 @@ def run_driver(inputs, source_label, bootargs, default_entry=None,
     algorithm_match = re.search(r"^\s*Algorithm:\s*(\S+)", info_text, re.M)
     check("avb:algorithm-line", algorithm_match is not None,
           "no anchored Algorithm line in info_image output")
-    check("avb:algorithm-none", algorithm_match.group(1) == "NONE",
+    check("avb:algorithm-signed", algorithm_match.group(1) == AVB_ALGORITHM,
           "algorithm=%s" % algorithm_match.group(1))
+    check("avb:key-sha1", AVB_KEY_PUBLIC_SHA1 in info_text,
+          "AVB public key SHA1 is not the pinned AOSP test key")
+    check("avb:release-string", AVB_RELEASE_STRING in info_text,
+          "AVB release string is not %s" % AVB_RELEASE_STRING)
+    check("avb:signing-report",
+          signing.get("avb", {}).get("signature_verified") is True,
+          "AVB signer did not report verified output")
 
     set_stage("recheck-sources")
     for key, path in inputs.items():
@@ -1701,7 +1730,7 @@ def run_driver(inputs, source_label, bootargs, default_entry=None,
         "inputs": {
             key: {"path": inputs[key], "length": source_sizes[key],
                   "sha256": source_digests[key]}
-            for key in sorted(inputs)
+            for key in sorted(inputs) if key != "avb_key"
         },
         "tools": dict(TOOL),
         "stock_image": {
@@ -1772,9 +1801,14 @@ def run_driver(inputs, source_label, bootargs, default_entry=None,
         },
         "avb": {
             "algorithm": algorithm_match.group(1),
+            "signed": True,
+            "key_public_sha1": AVB_KEY_PUBLIC_SHA1,
+            "release_string": AVB_RELEASE_STRING,
             "original_image_size": ois,
             "vbmeta_offset": vbo,
             "vbmeta_size": vbs,
+            "signing_report": signing_report,
+            "signing": signing,
             "verify_image_log": verify_log,
             "info_image_log": info_log,
         },

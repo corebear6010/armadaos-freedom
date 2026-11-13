@@ -44,6 +44,8 @@ python3 <repo>/devices/lenovo-tb322fc/boot/build_android_boot.py \
   --packer    <MultiBootKernelPatcher> \
   --unpacker  <UnpackTool> \
   --avbtool   <avbtool 路径> \
+  --avb-key   <AOSP RSA4096 私钥> \
+  [--avb-signer <kshim-avb-sign.py 路径>] \
   [--repacker <repack_boot_v4.py 路径>] \
   --out       <输出目录> \
   [--source-label <记录用标签>]
@@ -66,8 +68,11 @@ python3 <repo>/devices/lenovo-tb322fc/boot/build_android_boot.py \
 菜单为 Android 基座（默认项）+ 设备信息 + 语言切换/中文 + 按键操作；电源、
 高级与会话设置项已启用，调试串口、触屏与 SMP 已关闭。
 
-离线检查覆盖 Manifest ABI 校验、字节级往返与 avbtool 校验。校验用的 AVB
-元数据是**未签名**的，需要解锁 bootloader，无法保留原厂 Lenovo 签名。
+离线检查覆盖 Manifest ABI 校验、字节级往返、强制 AVB 签名和公钥指纹校验。
+打包器先生成低层载荷，再调用 `kshim-avb-sign.py` 使用 `SHA256_RSA4096`
+重签；默认固定为 AOSP 测试公钥
+`2597c218aae470a130f61162feaae70afd97f011`，签名或校验失败时不会产出
+`boot.img`。原厂 Lenovo 签名不会保留。
 
 ## Linux 启动载荷打包
 
@@ -78,7 +83,7 @@ python3 <repo>/devices/lenovo-tb322fc/boot/build_android_boot.py \
 | `--layout maintenance` | 显式提供 `--linux-image`、`--dtb`、`--initrd` 和 `--bootargs` | Android；可用 `--default-entry maintenance` 选择诊断环境 |
 | `--layout installed` | 提供 `--installer-result` 与 `--boot-dir`，从安装结果选择内核、DTB 和 initramfs | 机身 Linux；可用 `--default-entry android` 改为 Android |
 
-两种布局都需提供 `--stock-boot`、`--runtime`、`--packer`、`--unpacker`、`--repacker`、`--avbtool` 和独立的 `--out` 输出目录。`installed` 布局不能再手工传入另一组内核、DTB、initramfs 或命令行。
+两种布局都需提供 `--stock-boot`、`--runtime`、`--packer`、`--unpacker`、`--repacker`、`--avbtool`、`--avb-key` 和独立的 `--out` 输出目录；`--avb-signer` 默认指向同目录的 `kshim-avb-sign.py`。`installed` 布局不能再手工传入另一组内核、DTB、initramfs 或命令行。
 
 维护布局包含原厂 Android 和 Linux 诊断入口；安装布局增加机身 Linux，并让诊断入口共享同一份 Linux 内核、使用单独的 DTB。两者都不是五代的 TF 卡／机身八或九条目布局。打包过程校验布局、解包往返和 boot 封装，不执行刷写或重启。
 

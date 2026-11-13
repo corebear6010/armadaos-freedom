@@ -16,7 +16,8 @@ usage() {
     cat <<'EOF'
 Usage: armada-kshim-prepare --boot-dir DIR --sysroot DIR --stock-boot FILE
          --runtime FILE --packer FILE --unpacker FILE --repacker FILE
-         --avbtool FILE --out DIR [--source-label TEXT] [--entry FILE]
+         --avbtool FILE --avb-key FILE [--avb-signer FILE] --out DIR
+         [--source-label TEXT] [--entry FILE]
 
 Selects the native default BLS entry, exports its metadata, and packs a
 verified candidate under OUT/candidate. OUT must not exist or be empty.
@@ -35,6 +36,8 @@ mkbootimg=""
 unpacker=""
 repacker=""
 avbtool=""
+avb_key=""
+avb_signer=""
 out=""
 source_label=""
 entry=""
@@ -50,6 +53,8 @@ while [ "$#" -gt 0 ]; do
         --unpacker) [ "$#" -ge 2 ] || die "missing value for --unpacker"; unpacker=$2; shift 2 ;;
         --repacker) [ "$#" -ge 2 ] || die "missing value for --repacker"; repacker=$2; shift 2 ;;
         --avbtool) [ "$#" -ge 2 ] || die "missing value for --avbtool"; avbtool=$2; shift 2 ;;
+        --avb-key) [ "$#" -ge 2 ] || die "missing value for --avb-key"; avb_key=$2; shift 2 ;;
+        --avb-signer) [ "$#" -ge 2 ] || die "missing value for --avb-signer"; avb_signer=$2; shift 2 ;;
         --out) [ "$#" -ge 2 ] || die "missing value for --out"; out=$2; shift 2 ;;
         --source-label) [ "$#" -ge 2 ] || die "missing value for --source-label"; source_label=$2; shift 2 ;;
         --entry) [ "$#" -ge 2 ] || die "missing value for --entry"; entry=$2; explicit_entry=1; shift 2 ;;
@@ -76,6 +81,7 @@ abspath() {
 [ -n "$unpacker" ] || die "--unpacker is required"
 [ -n "$repacker" ] || die "--repacker is required"
 [ -n "$avbtool" ] || die "--avbtool is required"
+[ -n "$avb_key" ] || die "--avb-key is required"
 [ -n "$out" ] || die "--out is required"
 
 # Absolute before anything else can depend on the caller's cwd.
@@ -87,6 +93,11 @@ mkbootimg=$(abspath "$mkbootimg")
 unpacker=$(abspath "$unpacker")
 repacker=$(abspath "$repacker")
 avbtool=$(abspath "$avbtool")
+avb_key=$(abspath "$avb_key")
+if [ -z "$avb_signer" ]; then
+    avb_signer="$KSHIM_LIBEXEC/kshim-avb-sign.py"
+fi
+avb_signer=$(abspath "$avb_signer")
 out=$(abspath "$out")
 
 [ -d "$boot_dir" ] || die "boot dir not found: $boot_dir"
@@ -97,6 +108,8 @@ out=$(abspath "$out")
 [ -f "$unpacker" ] || die "unpack_bootimg not found: $unpacker"
 [ -f "$repacker" ] || die "repack not found: $repacker"
 [ -f "$avbtool" ] || die "avbtool not found: $avbtool"
+[ -f "$avb_key" ] || die "AVB private key not found: $avb_key"
+[ -f "$avb_signer" ] || die "AVB signer not found: $avb_signer"
 
 select_helper="$KSHIM_LIBEXEC/kshim-select-boot.py"
 builder="$KSHIM_LIBEXEC/kshim-build-boot.py"
@@ -145,6 +158,8 @@ builder_args=(
     --unpacker "$unpacker"
     --repacker "$repacker"
     --avbtool "$avbtool"
+    --avb-key "$avb_key"
+    --avb-signer "$avb_signer"
     --installer-result "$metadata"
     --boot-dir "$boot_dir"
     --out "$candidate"

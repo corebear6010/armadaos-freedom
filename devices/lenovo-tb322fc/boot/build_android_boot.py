@@ -87,6 +87,12 @@ PROBE_CAVEAT = (
 DEFAULT_REPACKER = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
     "lenovo-tb323fu", "boot", "star-chart-build", "repack_boot_v4.py")
+DEFAULT_AVB_SIGNER = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "..", "system_files", "usr", "libexec", "armada", "kshim-avb-sign.py")
+AVB_ALGORITHM = "SHA256_RSA4096"
+AVB_KEY_PUBLIC_SHA1 = "2597c218aae470a130f61162feaae70afd97f011"
+AVB_RELEASE_STRING = "freedom-edl-direct"
 
 STAGE = "init"
 CHECKS = []
@@ -280,6 +286,8 @@ def main():
     parser.add_argument("--packer", required=True)
     parser.add_argument("--unpacker", required=True)
     parser.add_argument("--avbtool", required=True)
+    parser.add_argument("--avb-key", required=True)
+    parser.add_argument("--avb-signer", default=DEFAULT_AVB_SIGNER)
     parser.add_argument("--repacker", default=None)
     parser.add_argument("--out", required=True)
     parser.add_argument("--source-label", default="")
@@ -293,6 +301,8 @@ def main():
         "packer": os.path.abspath(args.packer),
         "unpacker": os.path.abspath(args.unpacker),
         "avbtool": os.path.abspath(args.avbtool),
+        "avb_key": os.path.abspath(args.avb_key),
+        "avb_signer": os.path.abspath(args.avb_signer),
         "repacker": os.path.abspath(args.repacker or DEFAULT_REPACKER),
     }
     OUT = os.path.abspath(args.out)
@@ -406,7 +416,8 @@ def run_driver(inputs, source_label, dt_probe_report_slots=False):
     check("stock_boot:avb-footer", stock_has_footer,
           "stock boot image has no AVB footer")
 
-    for key in ("packer", "unpacker", "avbtool", "repacker"):
+    for key in ("packer", "unpacker", "avbtool", "repacker",
+                "avb_key", "avb_signer"):
         check("tool:%s" % key, os.path.isfile(inputs[key]), inputs[key])
 
     # Source hashes for every supplied tool plus stock and runtime.
@@ -630,6 +641,17 @@ def run_driver(inputs, source_label, dt_probe_report_slots=False):
         repack_cmd.append("--dt-probe-report-slots")
     run(repack_cmd, "repacker")
 
+    set_stage("avb-sign")
+    signing_report = os.path.join(OUT, "avb-signing.json")
+    run([sys.executable, "-B", inputs["avb_signer"],
+         "--image", final_boot,
+         "--stock-boot", inputs["stock_boot"],
+         "--avbtool", inputs["avbtool"],
+         "--key", inputs["avb_key"],
+         "--report", signing_report], "avb-signing")
+    with open(signing_report, encoding="utf-8") as handle:
+        signing = json.load(handle)
+
     set_stage("assert-boot")
     final = read_bytes(final_boot, "boot.img")
     final_boot_header = parse_boot_header(final)
@@ -697,7 +719,8 @@ def run_driver(inputs, source_label, dt_probe_report_slots=False):
 
     set_stage("avb")
     verify_log = os.path.join(LOGS, "avbtool_verify_image.stdout")
-    run([sys.executable, "-B", inputs["avbtool"], "verify_image", "--image", final_boot],
+    run([sys.executable, "-B", inputs["avbtool"], "verify_image", "--image", final_boot,
+         "--key", inputs["avb_key"]],
         "avbtool_verify_image")
     run([sys.executable, "-B", inputs["avbtool"], "info_image", "--image", final_boot],
         "avbtool_info_image")
@@ -705,8 +728,16 @@ def run_driver(inputs, source_label, dt_probe_report_slots=False):
     algorithm_match = re.search(r"^\s*Algorithm:\s*(\S+)", stdout_text("avbtool_info_image"), re.M)
     check("avb:algorithm-line", algorithm_match is not None,
           "no anchored Algorithm line in info_image output")
-    check("avb:algorithm-none", algorithm_match.group(1) == "NONE",
+    check("avb:algorithm-signed", algorithm_match.group(1) == AVB_ALGORITHM,
           "algorithm=%s" % algorithm_match.group(1))
+    info_text = stdout_text("avbtool_info_image")
+    check("avb:key-sha1", AVB_KEY_PUBLIC_SHA1 in info_text,
+          "AVB public key SHA1 is not the pinned AOSP test key")
+    check("avb:release-string", AVB_RELEASE_STRING in info_text,
+          "AVB release string is not %s" % AVB_RELEASE_STRING)
+    check("avb:signing-report",
+          signing.get("avb", {}).get("signature_verified") is True,
+          "AVB signer did not report verified output")
 
     set_stage("recheck-sources")
     for key, path in inputs.items():
@@ -739,7 +770,7 @@ def run_driver(inputs, source_label, dt_probe_report_slots=False):
         "inputs": {
             key: {"path": inputs[key], "length": source_sizes[key],
                   "sha256": source_digests[key]}
-            for key in sorted(inputs)
+            for key in sorted(inputs) if key != "avb_key"
         },
         "stock_image": {
             "length": len(stock_image),
@@ -778,15 +809,20 @@ def run_driver(inputs, source_label, dt_probe_report_slots=False):
             "final_boot": {"path": final_boot, "length": len(final),
                            "sha256": sha256_bytes(final)},
             "repack_report": repack_report,
+            "avb_signing_report": signing_report,
         },
         "boot": {
             "kernel_size": final_kernel_size,
             "kernel_offset": 4096,
             "avb": {
                 "algorithm": algorithm_match.group(1),
+                "signed": True,
+                "key_public_sha1": AVB_KEY_PUBLIC_SHA1,
+                "release_string": AVB_RELEASE_STRING,
                 "original_image_size": ois,
                 "vbmeta_offset": vbo,
                 "vbmeta_size": vbs,
+                "signing": signing,
                 "verify_image_log": verify_log,
                 "info_image_log": info_log,
             },
@@ -795,8 +831,8 @@ def run_driver(inputs, source_label, dt_probe_report_slots=False):
             "Raw uncompressed Android only; no Linux, custom DTB, initrd or gzip path.",
             "Offline byte-level round-trip plus official avbtool success is NOT "
             "hardware validation.",
-            "Unsigned AVB metadata requires an unlocked bootloader; the original "
-            "Lenovo OEM signature cannot be preserved after changing the kernel.",
+            "The output is force-signed with the pinned AOSP SHA256_RSA4096 "
+            "test key; the original Lenovo OEM signature is not preserved.",
             ".096 is an offline-only candidate and is not claimed to match the "
             "current .259 build; a current .259 candidate requires a matching "
             "original boot backup.",
