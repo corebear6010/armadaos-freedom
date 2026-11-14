@@ -89,7 +89,10 @@ exit 98
 STUB
 chmod +x "$stub_dir/skopeo"
 
-unset ARMADA_PKG_REGISTRY ARMADA_PKG_FALLBACK_REGISTRY
+# Keep these tests independent of the workflow environment. The resolver's
+# auth-error override is exercised explicitly below, while the regular cases
+# must still report lookup failures as errors.
+unset ARMADA_PKG_REGISTRY ARMADA_PKG_FALLBACK_REGISTRY ARMADA_PKG_IGNORE_AUTH_ERRORS
 
 export PATH="$stub_dir:$PATH"
 export STUB_CALL_LOG="$call_log"
