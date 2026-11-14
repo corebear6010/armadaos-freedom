@@ -73,6 +73,7 @@ done
 registries=("${unique[@]}")
 
 had_error=0
+had_definite_miss=0
 
 is_definite_miss() {
     local msg=$1
@@ -86,6 +87,18 @@ is_definite_miss() {
     if [[ $lower == *"name unknown"* || $lower == *"manifest unknown"* ]]; then
         return 0
     fi
+    return 1
+}
+
+is_auth_error() {
+    local msg=$1
+    local lower
+    lower=$(printf '%s' "$msg" | tr '[:upper:]' '[:lower:]')
+    case "$lower" in
+        *unauthorized*|*"authentication required"*|*"invalid username/password"*|*"403 (forbidden)"*|*"access to the resource is denied"*)
+            return 0
+            ;;
+    esac
     return 1
 }
 
@@ -106,7 +119,11 @@ for registry in "${registries[@]}"; do
     rm -f "$err_file"
 
     if is_definite_miss "$err_msg"; then
+        had_definite_miss=1
         printf 'cache miss: %s\n' "$candidate" >&2
+    elif [[ ${ARMADA_PKG_IGNORE_AUTH_ERRORS:-0} == 1 ]] &&
+         is_auth_error "$err_msg"; then
+        printf 'ignored auth error: %s\n' "$candidate" >&2
     else
         had_error=1
         printf 'lookup error (status %s): %s\n' "$status" "$candidate" >&2
@@ -121,5 +138,12 @@ if [[ $had_error -eq 1 ]]; then
     exit 1
 fi
 
+if [[ $had_definite_miss -eq 1 ]]; then
+    printf 'error: %s:%s not found in any reachable registry\n' "$package" "$hash" >&2
+    exit 3
+fi
+
+printf 'error: no registry could confirm %s:%s\n' "$package" "$hash" >&2
+exit 1
 printf 'error: %s:%s not found in any registry\n' "$package" "$hash" >&2
 exit 3

@@ -175,6 +175,37 @@ fi
 assert_calls "permission errors" "docker://$primary/$pkg:$hash
 docker://$fallback/$pkg:$hash"
 
+# 4b. PR fork mode may ignore primary auth errors only when the fallback
+# definitively proves that the content hash is absent.
+reset_calls
+write_behavior "docker://$primary/$pkg:$hash|unauthorized" "docker://$fallback/$pkg:$hash|miss"
+out=$(ARMADA_PKG_IGNORE_AUTH_ERRORS=1 bash "$resolver" "$pkg" "$hash" 2>"$workdir/stderr.log")
+status=$?
+if [[ $status -ne 3 || -n $out ]]; then
+    printf 'FAIL [ignored primary auth plus fallback miss]: status=%s out=%q\n' "$status" "$out" >&2
+    failures=$((failures + 1))
+elif ! grep -q "ignored auth error" "$workdir/stderr.log"; then
+    printf 'FAIL [ignored primary auth plus fallback miss stderr]\n' >&2
+    failures=$((failures + 1))
+else
+    printf 'PASS [ignored primary auth plus fallback miss]\n'
+fi
+assert_calls "ignored primary auth plus fallback miss" "docker://$primary/$pkg:$hash
+docker://$fallback/$pkg:$hash"
+
+# 4c. Ignoring auth errors must not turn two inaccessible registries into a
+# cache miss; there is no positive absence evidence.
+reset_calls
+write_behavior "docker://$primary/$pkg:$hash|unauthorized" "docker://$fallback/$pkg:$hash|denied"
+out=$(ARMADA_PKG_IGNORE_AUTH_ERRORS=1 bash "$resolver" "$pkg" "$hash" 2>"$workdir/stderr.log")
+status=$?
+if [[ $status -ne 1 || -n $out ]]; then
+    printf 'FAIL [ignored auth without absence]: status=%s out=%q\n' "$status" "$out" >&2
+    failures=$((failures + 1))
+else
+    printf 'PASS [ignored auth without absence]\n'
+fi
+
 # 5. Timeout with no fallback success exits 1.
 reset_calls
 write_behavior "docker://$primary/$pkg:$hash|timeout" "docker://$fallback/$pkg:$hash|timeout"
