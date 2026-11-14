@@ -1,0 +1,69 @@
+From: "lich.wang" <lich.wang@gmail.com>
+Date: Thu, 29 Oct 2026 10:30:00 +0800
+Subject: [PATCH] input: nt36532: scan for the pen by default and give it a resolution
+
+The boot firmware update ends with "support pen = 0": the vendor's Android
+user space turns pen scanning on later through /proc/support_pen. Without
+that the pen reports nothing. When the DT marks the panel with
+novatek,pen-support, start with pen scanning on; resume and the watchdog
+recovery already restore ts->pen_state, and /proc/support_pen still
+overrides it. A failed command is now logged instead of ignored.
+
+libinput also drops a tablet without a resolution ("missing tablet
+capabilities: resolution"). The pen reports 32000 x 20000 over the
+273.5 x 171 mm panel: 117 units/mm on both axes (NVT_PEN_UNITS_PER_MM).
+
+Tested on TB710FU (ArmadaOS desktop, no user-space setup): the pen
+reports ABS_X/ABS_Y resolution 117, libinput lists NVTCapacitivePen as a
+274x171mm tablet, and the pen taps and drags in KWin after boot.
+---
+diff --git a/drivers/input/touchscreen/nt36532/nt36xxx.c b/drivers/input/touchscreen/nt36532/nt36xxx.c
+--- a/drivers/input/touchscreen/nt36532/nt36xxx.c
++++ b/drivers/input/touchscreen/nt36532/nt36xxx.c
+@@ -2740,6 +2740,9 @@
+ 			     0, 0);
+ 	input_set_abs_params(ts->pen_input_dev, ABS_Y, 0,
+ 			     PEN_MAX_HEIGHT, 0, 0);
++	/* libinput ignores a tablet without a resolution */
++	input_abs_set_res(ts->pen_input_dev, ABS_X, NVT_PEN_UNITS_PER_MM);
++	input_abs_set_res(ts->pen_input_dev, ABS_Y, NVT_PEN_UNITS_PER_MM);
+ 	input_set_abs_params(ts->pen_input_dev, ABS_PRESSURE, 0,
+ 			     PEN_PRESSURE_MAX, 0, 0);
+ 	input_set_abs_params(ts->pen_input_dev, ABS_DISTANCE, 0,
+@@ -3182,7 +3185,8 @@
+ #if NVT_CUST_PROC_CMD
+ 	ts->edge_reject_state = 0;
+ 	ts->game_mode_state = 0;
+-	ts->pen_state = 0;
++	/* scan for the pen by default when the DT says the panel has one */
++	ts->pen_state = ts->pen_support ? 1 : 0;
+ #if NVT_DPR_SWITCH
+ 	ts->fw_pen_state = 0;
+ #endif
+diff --git a/drivers/input/touchscreen/nt36532/nt36xxx.h b/drivers/input/touchscreen/nt36532/nt36xxx.h
+--- a/drivers/input/touchscreen/nt36532/nt36xxx.h
++++ b/drivers/input/touchscreen/nt36532/nt36xxx.h
+@@ -94,6 +94,8 @@
+ #define NVT_PEN_NAME "NVTCapacitivePen"
+ 
+ //---Touch info.---
++/* TB710FU: the pen reports 32000 x 20000 over the 273.5 x 171 mm panel */
++#define NVT_PEN_UNITS_PER_MM 117
+ #ifdef BUILD_KIRBY_TOUCH
+ #define NVT_SUPER_RESOLUTION_N 10
+ #if NVT_SUPER_RESOLUTION_N
+diff --git a/drivers/input/touchscreen/nt36532/nt36xxx_fw_update.c b/drivers/input/touchscreen/nt36532/nt36xxx_fw_update.c
+--- a/drivers/input/touchscreen/nt36532/nt36xxx_fw_update.c
++++ b/drivers/input/touchscreen/nt36532/nt36xxx_fw_update.c
+@@ -923,7 +923,8 @@
+ 	mutex_unlock(&ts->lock);
+ #if NVT_SUPPORT_PEN
+ 	if(ts->probe_state == 1){
+-		nvt_support_pen_set(0);
++		if (nvt_support_pen_set(ts->pen_state))
++			NVT_ERR("set pen scanning to %d failed\n", ts->pen_state);
+ 		ts->probe_state = 0;
+ 	}
+ #endif
+-- 
+2.47.0

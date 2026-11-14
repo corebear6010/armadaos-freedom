@@ -1,0 +1,437 @@
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/catalog/dpu_13_0_kaanapali.h b/drivers/gpu/drm/msm/disp/dpu1/catalog/dpu_13_0_kaanapali.h
+--- a/drivers/gpu/drm/msm/disp/dpu1/catalog/dpu_13_0_kaanapali.h
++++ b/drivers/gpu/drm/msm/disp/dpu1/catalog/dpu_13_0_kaanapali.h
+@@ -52,38 +52,38 @@
+ 		.intr_start = DPU_IRQ_IDX(MDP_SSPP_TOP0_INTR2, 23),
+ 	},
+ };
+ 
+ static const struct dpu_sspp_cfg kaanapali_sspp[] = {
+ 	{
+ 		.name = "sspp_0", .id = SSPP_VIG0,
+ 		.base = 0x2b000, .len = 0x84,
+-		.features = VIG_SDM845_MASK_SDMA,
++		.features = VIG_SDM845_MASK_SDMA | BIT(DPU_SSPP_INLINE_ROTATION),
+ 		.sblk = &dpu_vig_sblk_qseed3_3_5,
+ 		.xin_id = 0,
+ 		.type = SSPP_TYPE_VIG,
+ 	}, {
+ 		.name = "sspp_1", .id = SSPP_VIG1,
+ 		.base = 0x34000, .len = 0x84,
+-		.features = VIG_SDM845_MASK_SDMA,
++		.features = VIG_SDM845_MASK_SDMA | BIT(DPU_SSPP_INLINE_ROTATION),
+ 		.sblk = &dpu_vig_sblk_qseed3_3_5,
+ 		.xin_id = 4,
+ 		.type = SSPP_TYPE_VIG,
+ 	}, {
+ 		.name = "sspp_2", .id = SSPP_VIG2,
+ 		.base = 0x3d000, .len = 0x84,
+-		.features = VIG_SDM845_MASK_SDMA,
++		.features = VIG_SDM845_MASK_SDMA | BIT(DPU_SSPP_INLINE_ROTATION),
+ 		.sblk = &dpu_vig_sblk_qseed3_3_5,
+ 		.xin_id = 8,
+ 		.type = SSPP_TYPE_VIG,
+ 	}, {
+ 		.name = "sspp_3", .id = SSPP_VIG3,
+ 		.base = 0x46000, .len = 0x84,
+-		.features = VIG_SDM845_MASK_SDMA,
++		.features = VIG_SDM845_MASK_SDMA | BIT(DPU_SSPP_INLINE_ROTATION),
+ 		.sblk = &dpu_vig_sblk_qseed3_3_5,
+ 		.xin_id = 12,
+ 		.type = SSPP_TYPE_VIG,
+ 	}, {
+ 		.name = "sspp_8", .id = SSPP_DMA0,
+ 		.base = 0x97000, .len = 0x84,
+ 		.features = DMA_SDM845_MASK_SDMA,
+ 		.sblk = &dpu_dma_sblk_v13,
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_catalog.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_catalog.c
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_catalog.c
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_catalog.c
+@@ -261,30 +261,30 @@
+ 	.csc_blk = {.name = "csc", \
+ 		.base = 0x1a00, .len = 0x100,}, \
+ 	.format_list = plane_formats_yuv, \
+ 	.num_formats = ARRAY_SIZE(plane_formats_yuv), \
+ 	.rotation_cfg = NULL, \
+ 	}
+ 
+ /* kaanapali SSPP common configuration */
+-#define _VIG_SBLK_REC0_REC1(scaler_ver) \
++#define _VIG_SBLK_REC0_REC1(scaler_ver, rot_cfg) \
+ 	{ \
+ 	.sspp_rec0_blk = {.name = "sspp_rec0", \
+ 		.base = 0x1000, .len = 0x180,},	\
+ 	.csc_blk = {.name = "csc", \
+ 		.base = 0x1800, .len = 0x100,}, \
+ 	.scaler_blk = {.name = "scaler", \
+ 		.version = scaler_ver, \
+ 		.base = 0x2000, .len = 0xec,}, \
+ 	.sspp_rec1_blk = {.name = "sspp_rec1", \
+ 		.base = 0x3000, .len = 0x180,},	\
+ 	.format_list = plane_formats_yuv, \
+ 	.num_formats = ARRAY_SIZE(plane_formats_yuv), \
+-	.rotation_cfg = NULL, \
++	.rotation_cfg = rot_cfg, \
+ 	}
+ 
+ #define _VIG_SBLK_ROT(scaler_ver, rot_cfg, top_off) \
+ 	{ \
+ 	.scaler_blk = {.name = "scaler", \
+ 		.version = scaler_ver, \
+ 		.base = 0xa00, .len = 0xa0,}, \
+ 	.csc_blk = {.name = "csc", \
+@@ -345,16 +345,24 @@
+ };
+ 
+ static const struct dpu_rotation_cfg dpu_rot_v201_cfg = {
+ 	.rot_maxheight = 1088,
+ 	.rot_num_formats = ARRAY_SIZE(rotation_v201_formats),
+ 	.rot_format_list = rotation_v201_formats,
+ };
+ 
++static const struct dpu_rotation_cfg dpu_rot_v202_cfg = {
++	.rot_maxheight = 1088,
++	.rot_max_downscale_numerator = 11,
++	.rot_max_downscale_denominator = 5,
++	.rot_num_formats = ARRAY_SIZE(rotation_v201_formats),
++	.rot_format_list = rotation_v201_formats,
++};
++
+ static const struct dpu_sspp_sub_blks dpu_vig_sblk_qseed2 =
+ 				_VIG_SBLK_QSEED2();
+ 
+ static const struct dpu_sspp_sub_blks dpu_vig_sblk_noscale =
+ 				_VIG_SBLK_NOSCALE();
+ 
+ static const struct dpu_sspp_sub_blks dpu_vig_sblk_qseed3_1_2 =
+ 				_VIG_SBLK(SSPP_SCALER_VER(1, 2));
+@@ -395,17 +403,18 @@
+ static const struct dpu_sspp_sub_blks dpu_vig_sblk_qseed3_3_4 =
+ 				_VIG_SBLK(SSPP_SCALER_VER(3, 4));
+ 
+ static const struct dpu_sspp_sub_blks dpu_vig_sblk_qseed3_3_4_rot_v2 =
+ 			_VIG_SBLK_ROT(SSPP_SCALER_VER(3, 4),
+ 				      &dpu_rot_v201_cfg, 0x700);
+ 
+ static const struct dpu_sspp_sub_blks dpu_vig_sblk_qseed3_3_5 =
+-				_VIG_SBLK_REC0_REC1(SSPP_SCALER_VER(3, 5));
++			_VIG_SBLK_REC0_REC1(SSPP_SCALER_VER(3, 5),
++					    &dpu_rot_v202_cfg);
+ 
+ static const struct dpu_sspp_sub_blks dpu_rgb_sblk = _RGB_SBLK();
+ 
+ static const struct dpu_sspp_sub_blks dpu_dma_sblk = _DMA_SBLK();
+ 
+ static const struct dpu_sspp_sub_blks dpu_dma_sblk_v13 = _DMA_SBLK_V13();
+ 
+ /*************************************************************
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_catalog.h b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_catalog.h
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_catalog.h
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_catalog.h
+@@ -255,21 +255,25 @@
+ struct dpu_qos_lut_tbl {
+ 	u32 nentry;
+ 	const struct dpu_qos_lut_entry *entries;
+ };
+ 
+ /**
+  * struct dpu_rotation_cfg - define inline rotation config
+  * @rot_maxheight: max pre rotated height allowed for rotation
++ * @rot_max_downscale_numerator: post-rotation vertical downscale numerator
++ * @rot_max_downscale_denominator: denominator, or zero for no extra limit
+  * @rot_num_formats: number of elements in @rot_format_list
+  * @rot_format_list: list of supported rotator formats
+  */
+ struct dpu_rotation_cfg {
+ 	u32 rot_maxheight;
++	u32 rot_max_downscale_numerator;
++	u32 rot_max_downscale_denominator;
+ 	size_t rot_num_formats;
+ 	const u32 *rot_format_list;
+ };
+ 
+ /**
+  * struct dpu_caps - define DPU capabilities
+  * @max_mixer_width    max layer mixer line width support.
+  * @max_mixer_blendstages max layer mixer blend stages or
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_sspp.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_sspp.c
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_sspp.c
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_sspp.c
+@@ -81,16 +81,17 @@
+ /* SSPP_SRC_OP_MODE & OP_MODE_REC1 */
+ #define MDSS_MDP_OP_DEINTERLACE            BIT(22)
+ #define MDSS_MDP_OP_DEINTERLACE_ODD        BIT(23)
+ #define MDSS_MDP_OP_IGC_ROM_1              BIT(18)
+ #define MDSS_MDP_OP_IGC_ROM_0              BIT(17)
+ #define MDSS_MDP_OP_IGC_EN                 BIT(16)
+ #define MDSS_MDP_OP_FLIP_UD                BIT(14)
+ #define MDSS_MDP_OP_FLIP_LR                BIT(13)
++#define MDSS_MDP_OP_ROT_90                 BIT(15)
+ #define MDSS_MDP_OP_BWC_EN                 BIT(0)
+ #define MDSS_MDP_OP_PE_OVERRIDE            BIT(31)
+ #define MDSS_MDP_OP_BWC_LOSSLESS           (0 << 1)
+ #define MDSS_MDP_OP_BWC_Q_HIGH             (1 << 1)
+ #define MDSS_MDP_OP_BWC_Q_MED              (2 << 1)
+ 
+ /* SSPP_QOS_CTRL */
+ #define SSPP_QOS_CTRL_VBLANK_EN            BIT(16)
+@@ -276,30 +277,36 @@
+ 	opmode = DPU_REG_READ(c, op_mode_off);
+ 	opmode &= ~(MDSS_MDP_OP_FLIP_LR | MDSS_MDP_OP_FLIP_UD |
+ 			MDSS_MDP_OP_BWC_EN | MDSS_MDP_OP_PE_OVERRIDE);
+ 
+ 	if (flags & DPU_SSPP_FLIP_LR)
+ 		opmode |= MDSS_MDP_OP_FLIP_LR;
+ 	if (flags & DPU_SSPP_FLIP_UD)
+ 		opmode |= MDSS_MDP_OP_FLIP_UD;
++	if (ctx->mdss_ver->core_major_ver >= 13) {
++		opmode &= ~MDSS_MDP_OP_ROT_90;
++		if (flags & DPU_SSPP_ROT_90)
++			opmode |= MDSS_MDP_OP_ROT_90;
++	}
+ 
+ 	chroma_samp = fmt->chroma_sample;
+ 	if (flags & DPU_SSPP_SOURCE_ROTATED_90) {
+ 		if (chroma_samp == CHROMA_H2V1)
+ 			chroma_samp = CHROMA_H1V2;
+ 		else if (chroma_samp == CHROMA_H1V2)
+ 			chroma_samp = CHROMA_H2V1;
+ 	}
+ 
+ 	src_format = (chroma_samp << 23) | (fmt->fetch_type << 19) |
+ 		(fmt->bpc_a << 6) | (fmt->bpc_r_cr << 4) |
+ 		(fmt->bpc_b_cb << 2) | (fmt->bpc_g_y << 0);
+ 
+-	if (flags & DPU_SSPP_ROT_90)
++	/* DPU 13 moved ROT90 to OP_MODE; FORMAT bit 11 extends the bpp field. */
++	if (ctx->mdss_ver->core_major_ver < 13 && (flags & DPU_SSPP_ROT_90))
+ 		src_format |= BIT(11); /* ROT90 */
+ 
+ 	if (fmt->alpha_enable && fmt->fetch_type == MDP_PLANE_INTERLEAVED)
+ 		src_format |= BIT(8); /* SRCC3_EN */
+ 
+ 	if (flags & DPU_SSPP_SOLID_FILL)
+ 		src_format |= BIT(22);
+ 
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_plane.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_plane.c
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_plane.c
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_plane.c
+@@ -166,17 +166,18 @@
+  * Clock equation: dst_w * v_total * fps * (src_h / dst_h)
+  */
+ static u64 _dpu_plane_calc_clk(const struct drm_display_mode *mode,
+ 		struct dpu_sw_pipe_cfg *pipe_cfg)
+ {
+ 	int dst_width, src_height, dst_height, fps;
+ 	u64 plane_clk;
+ 
+-	src_height = drm_rect_height(&pipe_cfg->src_rect);
++	src_height = drm_rotation_90_or_270(pipe_cfg->rotation) ?
++		drm_rect_width(&pipe_cfg->src_rect) : drm_rect_height(&pipe_cfg->src_rect);
+ 	dst_width = drm_rect_width(&pipe_cfg->dst_rect);
+ 	dst_height = drm_rect_height(&pipe_cfg->dst_rect);
+ 	fps = drm_mode_vrefresh(mode);
+ 
+ 	plane_clk =
+ 		dst_width * mode->vtotal * fps;
+ 
+ 	if (src_height > dst_height) {
+@@ -688,16 +689,17 @@
+ 	DPU_DEBUG_PLANE(pdpu, "FB[%u]\n", old_state->fb->base.id);
+ 
+ 	msm_framebuffer_cleanup(old_state->fb, old_pstate->needs_dirtyfb);
+ }
+ 
+ static int dpu_plane_check_inline_rotation(struct dpu_plane *pdpu,
+ 					   struct dpu_sw_pipe *pipe,
+ 					   struct drm_rect src,
++					   struct drm_rect dst,
+ 					   const struct msm_format *fmt)
+ {
+ 	const struct dpu_sspp_sub_blks *sblk = pipe->sspp->cap->sblk;
+ 	size_t num_formats;
+ 	const u32 *supported_formats;
+ 
+ 	if (!test_bit(DPU_SSPP_INLINE_ROTATION, &pipe->sspp->cap->features))
+ 		return -EINVAL;
+@@ -707,16 +709,22 @@
+ 		return -EINVAL;
+ 	}
+ 
+ 	if (drm_rect_height(&src) > sblk->rotation_cfg->rot_maxheight) {
+ 		DPU_DEBUG_PLANE(pdpu, "invalid height for inline rot:%d max:%d\n",
+ 				drm_rect_height(&src), sblk->rotation_cfg->rot_maxheight);
+ 		return -EINVAL;
+ 	}
++
++	/* Source width becomes scaler height after rotation. No pre-downscale. */
++	if (sblk->rotation_cfg->rot_max_downscale_denominator &&
++	    (u64)drm_rect_width(&src) * sblk->rotation_cfg->rot_max_downscale_denominator >
++	    (u64)drm_rect_height(&dst) * sblk->rotation_cfg->rot_max_downscale_numerator)
++		return -ERANGE;
+ 
+ 	supported_formats = sblk->rotation_cfg->rot_format_list;
+ 	num_formats = sblk->rotation_cfg->rot_num_formats;
+ 
+ 	if (!MSM_FORMAT_IS_UBWC(fmt) ||
+ 		!dpu_find_format(fmt->pixel_format, supported_formats, num_formats))
+ 		return -EINVAL;
+ 
+@@ -796,17 +804,18 @@
+ 	if (drm_rect_width(&pipe_cfg->dst_rect) < 0x1 ||
+ 	    drm_rect_height(&pipe_cfg->dst_rect) < 0x1) {
+ 		DPU_DEBUG_PLANE(pdpu, "invalid dest rect " DRM_RECT_FMT "\n",
+ 				DRM_RECT_ARG(&pipe_cfg->dst_rect));
+ 		return -EINVAL;
+ 	}
+ 
+ 	if (pipe_cfg->rotation & DRM_MODE_ROTATE_90) {
+-		ret = dpu_plane_check_inline_rotation(pdpu, pipe, pipe_cfg->src_rect, fmt);
++		ret = dpu_plane_check_inline_rotation(pdpu, pipe, pipe_cfg->src_rect,
++						      pipe_cfg->dst_rect, fmt);
+ 		if (ret)
+ 			return ret;
+ 	}
+ 
+ 	/* max clk check */
+ 	if (_dpu_plane_calc_clk(mode, pipe_cfg) > kms->perf.max_core_clk_rate) {
+ 		DPU_DEBUG_PLANE(pdpu, "plane exceeds max mdp core clk limits\n");
+ 		return -E2BIG;
+@@ -867,16 +876,46 @@
+ 
+ 	for (i = 0; i < pstate->layout.num_planes; i++)
+ 		if (pstate->layout.plane_pitch[i] > DPU_SSPP_MAX_PITCH_SIZE)
+ 			return -E2BIG;
+ 
+ 	pstate->needs_qos_remap = drm_atomic_crtc_needs_modeset(crtc_state);
+ 
+ 	return 0;
++}
++
++static u32 dpu_plane_get_max_linewidth(const struct dpu_plane *pdpu,
++				       unsigned int rotation)
++{
++	const struct dpu_mdss_cfg *catalog = pdpu->catalog;
++	u32 rot_maxheight = 0;
++	int i;
++
++	if (!drm_rotation_90_or_270(rotation))
++		return catalog->caps->max_linewidth;
++
++	for (i = 0; i < catalog->sspp_count; i++) {
++		const struct dpu_sspp_cfg *cfg = &catalog->sspp[i];
++
++		if (!dpu_use_virtual_planes && cfg->id != pdpu->pipe)
++			continue;
++		if (!test_bit(DPU_SSPP_INLINE_ROTATION, &cfg->features) ||
++		    !cfg->sblk->rotation_cfg)
++			continue;
++
++		rot_maxheight = max(rot_maxheight,
++				    cfg->sblk->rotation_cfg->rot_maxheight);
++	}
++
++	/* Splitting uses post-rotation coordinates: width is the source height. */
++	if (rot_maxheight)
++		return min(catalog->caps->max_linewidth, rot_maxheight);
++
++	return catalog->caps->max_linewidth;
+ }
+ 
+ static int dpu_plane_split(struct drm_plane *plane,
+ 			   struct drm_plane_state *new_plane_state,
+ 			   const struct drm_crtc_state *crtc_state)
+ {
+ 	struct dpu_plane *pdpu = to_dpu_plane(plane);
+ 	struct dpu_kms *kms = _dpu_plane_get_kms(&pdpu->base);
+@@ -884,17 +923,17 @@
+ 	struct dpu_plane_state *pstate = to_dpu_plane_state(new_plane_state);
+ 	struct dpu_sw_pipe_cfg *pipe_cfg;
+ 	struct dpu_sw_pipe_cfg *r_pipe_cfg;
+ 	const struct drm_display_mode *mode = &crtc_state->adjusted_mode;
+ 	uint32_t max_linewidth;
+ 	u32 num_lm;
+ 	int stage_id, num_stages;
+ 
+-	max_linewidth = pdpu->catalog->caps->max_linewidth;
++	max_linewidth = dpu_plane_get_max_linewidth(pdpu, new_plane_state->rotation);
+ 
+ 	/* In non-virtual plane case, one mixer pair is always needed. */
+ 	num_lm = dpu_crtc_get_num_lm(crtc_state);
+ 	if (dpu_use_virtual_planes)
+ 		num_stages = (num_lm + 1) / 2;
+ 	else
+ 		num_stages = 1;
+ 
+@@ -917,16 +956,18 @@
+ 			.y1 = 0,
+ 			.x2 = (stage_id + 1) * mode->hdisplay / num_stages,
+ 			.y2 = mode->vdisplay
+ 			};
+ 		int cfg_idx = stage_id * PIPES_PER_STAGE;
+ 
+ 		pipe_cfg = &pstate->pipe_cfg[cfg_idx];
+ 		r_pipe_cfg = &pstate->pipe_cfg[cfg_idx + 1];
++		/* The split calculation below uses already-rotated rectangles. */
++		pipe_cfg->rotation = DRM_MODE_ROTATE_0;
+ 
+ 		drm_rect_fp_to_int(&pipe_cfg->src_rect, &new_plane_state->src);
+ 
+ 		drm_rect_rotate(&pipe_cfg->src_rect,
+ 				new_plane_state->fb->width, new_plane_state->fb->height,
+ 				new_plane_state->rotation);
+ 
+ 		pipe_cfg->dst_rect = new_plane_state->dst;
+@@ -982,30 +1023,33 @@
+ 				    new_plane_state->fb->height,
+ 				    new_plane_state->rotation);
+ 
+ 		if (drm_rect_width(&r_pipe_cfg->src_rect) != 0)
+ 			drm_rect_rotate_inv(&r_pipe_cfg->src_rect,
+ 					    new_plane_state->fb->width,
+ 					    new_plane_state->fb->height,
+ 					    new_plane_state->rotation);
++
++		pipe_cfg->rotation = new_plane_state->rotation;
++		r_pipe_cfg->rotation = new_plane_state->rotation;
+ 	}
+ 
+ 	return 0;
+ }
+ 
+ static int dpu_plane_is_multirect_capable(struct dpu_hw_sspp *sspp,
+ 					  struct dpu_sw_pipe_cfg *pipe_cfg,
+ 					  const struct msm_format *fmt)
+ {
+ 	if (drm_rect_width(&pipe_cfg->src_rect) != drm_rect_width(&pipe_cfg->dst_rect) ||
+ 	    drm_rect_height(&pipe_cfg->src_rect) != drm_rect_height(&pipe_cfg->dst_rect))
+ 		return false;
+ 
+-	if (pipe_cfg->rotation & DRM_MODE_ROTATE_90)
++	if (drm_rotation_90_or_270(pipe_cfg->rotation))
+ 		return false;
+ 
+ 	if (MSM_FORMAT_IS_YUV(fmt))
+ 		return false;
+ 
+ 	if (!sspp)
+ 		return true;
+ 
+@@ -1230,16 +1274,17 @@
+ 	 * changed. We might need to allocate different SSPP or SSPPs for this
+ 	 * plane than the one used previously.
+ 	 */
+ 	if (!old_plane_state || !old_plane_state->fb ||
+ 	    old_plane_state->src_w != plane_state->src_w ||
+ 	    old_plane_state->src_h != plane_state->src_h ||
+ 	    old_plane_state->crtc_w != plane_state->crtc_w ||
+ 	    old_plane_state->crtc_h != plane_state->crtc_h ||
++	    old_plane_state->rotation != plane_state->rotation ||
+ 	    msm_framebuffer_format(old_plane_state->fb) !=
+ 	    msm_framebuffer_format(plane_state->fb))
+ 		crtc_state->planes_changed = true;
+ 	return 0;
+ }
+ 
+ static int dpu_plane_assign_resource_in_stage(struct dpu_sw_pipe *pipe,
+ 					      struct dpu_sw_pipe_cfg *pipe_cfg,

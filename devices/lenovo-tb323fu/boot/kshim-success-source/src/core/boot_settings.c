@@ -26,6 +26,7 @@ static bool default_target_valid(enum boot_default_target target)
     case BOOT_TARGET_ANDROID:
     case BOOT_TARGET_INTERNAL:
     case BOOT_TARGET_TF:
+    case BOOT_TARGET_LAST:
         return true;
     default:
         return false;
@@ -65,6 +66,7 @@ int boot_settings_init(struct boot_settings *out)
 
     out->device_choice = BOOT_DEVICE_AUTO;
     out->default_target = BOOT_TARGET_MANIFEST;
+    out->last_target = BOOT_TARGET_MANIFEST;
     return BOOT_SETTINGS_OK;
 }
 
@@ -75,7 +77,8 @@ int boot_settings_validate(const struct boot_settings *settings)
     }
 
     if (!device_choice_valid(settings->device_choice) ||
-        !default_target_valid(settings->default_target)) {
+        !default_target_valid(settings->default_target) ||
+        (settings->last_target != BOOT_TARGET_MANIFEST && !candidate_valid(settings->last_target))) {
         return BOOT_SETTINGS_INVALID;
     }
 
@@ -129,7 +132,9 @@ int boot_settings_resolve_default(const struct boot_settings *settings,
         }
     }
 
-    if (settings->default_target == BOOT_TARGET_MANIFEST) {
+    enum boot_default_target target = settings->default_target == BOOT_TARGET_LAST ?
+        settings->last_target : settings->default_target;
+    if (target == BOOT_TARGET_MANIFEST) {
         if (manifest_initial >= count) {
             return BOOT_SETTINGS_INVALID;
         }
@@ -138,7 +143,7 @@ int boot_settings_resolve_default(const struct boot_settings *settings,
     }
 
     for (i = 0; i < count; i++) {
-        if (available[i] != settings->default_target) {
+        if (available[i] != target) {
             continue;
         }
         if (matches == 0) {

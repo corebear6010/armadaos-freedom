@@ -2,7 +2,7 @@
 """Persistent kShimC provisioning and update state around armada-kshim-sync.
 
   provision    validate a first-device installed image against the booted
-               native deployment, copy the two private inputs and record the
+               native deployment, copy the three private inputs and record the
                baseline. No block write, no install, no reboot.
   sync         compare the current native default with the recorded payload,
                and only then call armada-kshim-sync once.
@@ -10,7 +10,7 @@
                observation.
 
 State is an immutable config.json plus state.json under --state-dir, with the
-stock/runtime inputs held in a private inputs/ directory. All JSON updates are
+stock/runtime/AVB-key inputs held in a private inputs/ directory. All JSON updates are
 fsync + rename + parent fsync. The persistent lock is a separate
 /run/armada-kshim-state.lock; the child sync keeps its own
 /run/armada-bootimg.lock. Selection, block and report rules come from
@@ -42,6 +42,7 @@ BUILDER = "kshim-build-boot.py"
 INPUT_NAMES = {
     "stock_boot": "inputs/stock-boot.img",
     "runtime": "inputs/runtime.bin",
+    "avb_key": "inputs/testkey_rsa4096.pem",
 }
 STATE_ROOT = "/var/lib/armada/kshimc"
 HEX64 = re.compile(r"[0-9a-f]{64}\Z")
@@ -449,6 +450,9 @@ def tool_hashes(sync, libexec, tools_dir):
         path = os.path.join(tools_dir, sync.TOOL_FILES[key])
         need(os.path.isfile(path), "kShimC tool missing (%s): %s" % (key, path))
         tools[key] = file_sha256(path, "tool %s" % key)
+    signer = os.path.join(libexec, sync.SIGNER_FILE)
+    need(os.path.isfile(signer), "AVB signer missing: %s" % signer)
+    tools["avb_signer"] = file_sha256(signer, "AVB signer")
     return builder_sha, tools
 
 
@@ -465,13 +469,14 @@ def descriptor(item):
     }
 
 
-def fingerprint(item, assets, stock_sha, runtime_sha, builder_sha, tools):
+def fingerprint(item, assets, input_shas, builder_sha, tools):
     return {
         "descriptor": descriptor(item),
         "assets": {"linux_image": assets["linux_image"],
                    "initrd": assets["initrd"],
                    "dtb": assets["dtb"]},
-        "inputs": {"stock_boot": stock_sha, "runtime": runtime_sha},
+        "inputs": {key: input_shas[key]
+                   for key in ("stock_boot", "runtime", "avb_key")},
         "builder": {"name": BUILDER, "sha256": builder_sha},
         "tools": {key: tools[key] for key in sorted(tools)},
     }
@@ -584,8 +589,8 @@ def advance(state, plan, report, raw, before, calling_boot_id, action, status,
         "identity": {"checksum": item["identity"]["checksum"],
                      "stateroot": item["identity"]["stateroot"],
                      "serial": item["identity"]["serial"]},
-        "fingerprint": fingerprint(item, assets, input_shas["stock_boot"],
-                                   input_shas["runtime"], builder_sha, tools),
+        "fingerprint": fingerprint(item, assets, input_shas,
+                                   builder_sha, tools),
     }
     if raw != before:
         state["last_written_boot_id"] = calling_boot_id
@@ -610,6 +615,7 @@ def run_child_sync(args, config, transaction_dir, before):
     work = os.path.join(transaction_dir, "work")
     stock = os.path.join(args.state_dir, INPUT_NAMES["stock_boot"])
     runtime = os.path.join(args.state_dir, INPUT_NAMES["runtime"])
+    avb_key = os.path.join(args.state_dir, INPUT_NAMES["avb_key"])
     command = [
         sys.executable, os.path.join(args.libexec, "armada-kshim-sync"),
         "--boot-dir", args.boot_dir,
@@ -621,6 +627,8 @@ def run_child_sync(args, config, transaction_dir, before):
         "--stock-sha256", config["inputs"]["stock_boot"]["sha256"],
         "--runtime", runtime,
         "--runtime-sha256", config["inputs"]["runtime"]["sha256"],
+        "--avb-key", avb_key,
+        "--avb-signer", os.path.join(args.libexec, sync.SIGNER_FILE),
         "--partuuid", config["target"]["guid"],
         "--expected-current-sha256", before,
         "--work", work,
@@ -752,8 +760,7 @@ def pending_provenance(pending, tool_keys):
 def plan_item_fingerprint(plan, selector, boot, input_shas, builder_sha, tools):
     return fingerprint(plan["candidate"],
                        asset_hashes(selector, boot, plan["candidate"]),
-                       input_shas["stock_boot"], input_shas["runtime"],
-                       builder_sha, tools)
+                       input_shas, builder_sha, tools)
 
 
 def reconcile_pending(writer, args, config, state, identity, raw, input_shas,
@@ -871,8 +878,8 @@ def prune_owned_transactions(state_dir, state):
 
 
 def cmd_provision(sync, args):
-    for name in ("stock_boot", "runtime", "current_image", "current_report",
-                 "partuuid"):
+    for name in ("stock_boot", "runtime", "avb_key", "current_image",
+                 "current_report", "partuuid"):
         need(getattr(args, name),
              "--%s is required for provision" % name.replace("_", "-"))
     state_dir = os.path.abspath(args.state_dir)
@@ -915,6 +922,9 @@ def cmd_provision(sync, args):
     need(runtime_sha == checksum_text(runtime_entry.get("sha256"),
                                       "report inputs.runtime.sha256"),
          "runtime hash does not match the current report")
+    avb_key_sha = file_sha256(args.avb_key, "AVB private key")
+    avb_key_length = os.stat(args.avb_key).st_size
+    need(avb_key_length > 0, "AVB private key is empty")
 
     plan = native_plan(sync, args, selector)
     validate_plan(plan)
@@ -949,8 +959,13 @@ def cmd_provision(sync, args):
 
     builder_sha, tools = tool_hashes(sync, args.libexec, args.tools_dir)
     boot_id = read_boot_id()
-    baseline_fingerprint = fingerprint(fallback, assets, stock_sha,
-                                       runtime_sha, builder_sha, tools)
+    input_shas = {
+        "stock_boot": stock_sha,
+        "runtime": runtime_sha,
+        "avb_key": avb_key_sha,
+    }
+    baseline_fingerprint = fingerprint(fallback, assets, input_shas,
+                                       builder_sha, tools)
 
     config = {
         "schema": CONFIG_SCHEMA,
@@ -964,6 +979,9 @@ def cmd_provision(sync, args):
             "runtime": {"path": INPUT_NAMES["runtime"],
                         "length": runtime_entry["length"],
                         "sha256": runtime_sha},
+            "avb_key": {"path": INPUT_NAMES["avb_key"],
+                        "length": avb_key_length,
+                        "sha256": avb_key_sha},
         },
     }
     state = {
@@ -993,7 +1011,7 @@ def cmd_provision(sync, args):
         "initrd": fallback["initrd"],
         "fdtdir": fallback["fdtdir"],
         "assets": {key: {"sha256": assets[key]} for key in sorted(assets)},
-        "inputs": {"stock_boot": stock_sha, "runtime": runtime_sha},
+        "inputs": input_shas,
         "builder": {"name": BUILDER, "sha256": builder_sha},
         "tools": {key: tools[key] for key in sorted(tools)},
         "current_image_sha256": image_sha,
@@ -1015,6 +1033,9 @@ def cmd_provision(sync, args):
         copy_verified(args.runtime,
                       os.path.join(staging, INPUT_NAMES["runtime"]),
                       runtime_entry["length"], runtime_sha, "runtime")
+        copy_verified(args.avb_key,
+                      os.path.join(staging, INPUT_NAMES["avb_key"]),
+                      avb_key_length, avb_key_sha, "AVB private key")
         fsync_dir(inputs_dir)
         write_json_atomic(os.path.join(staging, "config.json"), config)
         write_json_atomic(os.path.join(staging, "baseline.json"), baseline)
@@ -1143,6 +1164,7 @@ def parse_args(argv=None):
                         default="/usr/libexec/armada/kshim-tools")
     parser.add_argument("--stock-boot")
     parser.add_argument("--runtime")
+    parser.add_argument("--avb-key")
     parser.add_argument("--current-image")
     parser.add_argument("--current-report")
     parser.add_argument("--partuuid")

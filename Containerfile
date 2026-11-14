@@ -13,7 +13,6 @@ ARG GAMESCOPE_REF
 ARG GAMESCOPE_SESSION_REF
 ARG GAMESCOPE_SESSION_STEAM_REF
 ARG KWIN_REF
-ARG PLASMA_MOBILE_REF
 ARG POWERDEVIL_REF
 ARG PROTONTRICKS_REF
 ARG KERNEL_REF
@@ -31,6 +30,7 @@ ARG ARMADA_SPLASH_REF
 ARG ARMADA_RGB_REF
 ARG UMTP_RESPONDER_REF
 ARG KSHIM_TOOLS_REF
+ARG BTOP_CN_REF
 
 FROM ${STEAM_BOOTSTRAP_REF} AS steam-bootstrap
 
@@ -47,8 +47,6 @@ FROM ${GAMESCOPE_SESSION_REF} AS gamescope-session
 FROM ${GAMESCOPE_SESSION_STEAM_REF} AS gamescope-session-steam
 
 FROM ${KWIN_REF} AS kwin
-
-FROM ${PLASMA_MOBILE_REF} AS plasma-mobile
 
 FROM ${POWERDEVIL_REF} AS powerdevil
 
@@ -84,11 +82,13 @@ FROM ${UMTP_RESPONDER_REF} AS umtp-responder
 
 FROM ${KSHIM_TOOLS_REF} AS kshim-tools
 
+FROM ${BTOP_CN_REF} AS btop-cn
+
 FROM docker.io/library/node:22-slim AS decky-build
-WORKDIR /build/armada-control
-COPY decky/armada-control/package.json decky/armada-control/package-lock.json ./
+WORKDIR /build/freedom-control
+COPY decky/freedom-control/decky/armada-control/package.json decky/freedom-control/decky/armada-control/package-lock.json ./
 RUN npm ci
-COPY decky/armada-control/ ./
+COPY decky/freedom-control/decky/armada-control/ ./
 RUN npm test && npm run build
 WORKDIR /build/armada-store
 COPY decky/armada-store/package.json decky/armada-store/package-lock.json ./
@@ -96,14 +96,121 @@ RUN npm ci
 COPY decky/armada-store/ ./
 RUN npm run build
 
+FROM mcr.microsoft.com/dotnet/sdk:10.0.401 AS boot-tool-builder
+
+ARG DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /boot-tool-src
+ARG BOOT_TOOL_SOURCE=_build-boot-tool
+COPY ${BOOT_TOOL_SOURCE}/ ./
+RUN python3 tools/publish-boot-tool.py \
+        --rid linux-arm64 \
+        --inputs tools/boot-tool-inputs \
+        --output /boot-tool-output \
+    && python3 tools/verify-boot-tool.py /boot-tool-output
+
+FROM scratch AS update-boot-tool
+COPY --from=boot-tool-builder /boot-tool-output/ /usr/libexec/armada/boot-tool/
+COPY --from=boot-tool-builder /boot-tool-src/boot-tool-source.json /usr/share/armada/updates/boot-tool-source.json
+
+FROM ubuntu:24.04 AS update-runtime
+
+ARG DEBIAN_FRONTEND=noninteractive
+ENV LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        coreutils \
+        findutils \
+        grep \
+        sed \
+        tar \
+        git \
+        cmake \
+        ninja-build \
+        gcc-aarch64-linux-gnu \
+        g++-aarch64-linux-gnu \
+        binutils-aarch64-linux-gnu \
+        binutils \
+        python3 \
+        python3-venv \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN python3 -m venv /opt/kconfig \
+    && /opt/kconfig/bin/pip install --no-cache-dir --disable-pip-version-check kconfiglib==14.1.0
+
+ENV PATH="/opt/kconfig/bin:${PATH}"
+
+COPY build_files/build-edl-runtime.sh build_files/edl_device_config.py build_files/edl-devices.json /runtime-source/build_files/
+COPY build_files/update_ab_inspect.c build_files/update_ufs_boot.c build_files/update_ufs_boot.h /runtime-source/build_files/
+COPY devices/lenovo-tb323fu/boot/kshim-success-source /runtime-source/devices/lenovo-tb323fu/boot/kshim-success-source
+
+RUN bash /runtime-source/build_files/build-edl-runtime.sh --source /runtime-source --work /runtime-build --jobs 4
+
+RUN aarch64-linux-gnu-gcc -std=c11 -O2 -Wall -Wextra -Werror \
+        -fPIC -fvisibility=hidden -shared -Wl,-z,relro,-z,now \
+        -I/runtime-source/devices/lenovo-tb323fu/boot/kshim-success-source/src/include \
+        /runtime-source/build_files/update_ab_inspect.c \
+        /runtime-source/build_files/update_ufs_boot.c \
+        /runtime-source/devices/lenovo-tb323fu/boot/kshim-success-source/src/core/storage_ab.c \
+        /runtime-source/devices/lenovo-tb323fu/boot/kshim-success-source/src/core/storage_block.c \
+        -o /runtime-build/libarmada-update-ab.so
+
 FROM scratch AS ctx
 COPY build_files /build_files/
+COPY --from=update-runtime /runtime-build/runtimes/ /armada-runtimes/
 COPY decky /decky/
 COPY system_files /system_files/
+COPY --from=update-boot-tool / /system_files/
+COPY --from=update-runtime /runtime-build/libarmada-update-ab.so /system_files/usr/libexec/armada/libarmada-update-ab.so
+COPY --chmod=0755 system_files/usr/bin/armada-reboot-edl /system_files/usr/bin/armada-reboot-edl
+# TB323FU's two connectors share one controller. Reuse its tested routing
+# components in the common image; the helper checks the board compatible.
+COPY devices/lenovo-tb323fu/rootfs/usr/libexec/tb323fu/tb323fu-usb-port /system_files/usr/libexec/tb323fu/tb323fu-usb-port
+COPY devices/lenovo-tb323fu/rootfs/etc/udev/rules.d/71-tb323fu-usb-host.rules /system_files/usr/lib/udev/rules.d/71-tb323fu-usb-host.rules
+COPY devices/lenovo-tb323fu/kernel/tb323fu-linux-11a25bf8/tb323fu-linux-11a25bf89b65fff48112a91a0b25bc247e7736d8/userspace/platform/udev/70-tb323fu-usb-port.rules /system_files/usr/lib/udev/rules.d/70-tb323fu-usb-port.rules
+COPY devices/lenovo-tb323fu/kernel/tb323fu-linux-11a25bf8/tb323fu-linux-11a25bf89b65fff48112a91a0b25bc247e7736d8/userspace/platform/systemd/system/tb323fu-usb-port.service /system_files/usr/lib/systemd/system/tb323fu-usb-port.service
+# TB323FU audio: the public ALSA UCM verb, the device topology, the vendor
+# platform's mixer defaults and its speaker gain/protection pair, plus the
+# fixed per-model ADSP firmware bundle. tb323fu-audio-prepare stages them on
+# the exact lenovo,baldur board only; the bundle is verified at build time
+# against devices/lenovo-tb323fu/firmware/audio/SHA256SUMS.
+COPY devices/lenovo-tb323fu/kernel/tb323fu-linux-11a25bf8/tb323fu-linux-11a25bf89b65fff48112a91a0b25bc247e7736d8/userspace/platform/alsa/ucm2/conf.d/kaanapali/LENOVO-TB323FU.conf /tb323fu-audio/ucm2/conf.d/kaanapali/LENOVO-TB323FU.conf
+COPY devices/lenovo-tb323fu/kernel/tb323fu-linux-11a25bf8/tb323fu-linux-11a25bf89b65fff48112a91a0b25bc247e7736d8/userspace/platform/alsa/ucm2/Lenovo/TB323FU/HiFi.conf /tb323fu-audio/ucm2/Lenovo/TB323FU/HiFi.conf
+COPY devices/lenovo-tb323fu/kernel/tb323fu-linux-11a25bf8/tb323fu-linux-11a25bf89b65fff48112a91a0b25bc247e7736d8/firmware/audio/LENOVO-TB323FU-tplg.bin /tb323fu-audio/LENOVO-TB323FU-tplg.bin
+COPY devices/lenovo-tb323fu/kernel/tb323fu-linux-11a25bf8/tb323fu-linux-11a25bf89b65fff48112a91a0b25bc247e7736d8/userspace/platform/libexec/tb323fu-audio-defaults /tb323fu-audio/tb323fu-audio-defaults
+COPY devices/lenovo-tb323fu/kernel/tb323fu-linux-11a25bf8/tb323fu-linux-11a25bf89b65fff48112a91a0b25bc247e7736d8/userspace/platform/udev/91-tb323fu-audio.rules /tb323fu-audio/91-tb323fu-audio.rules
+COPY devices/lenovo-tb323fu/kernel/tb323fu-linux-11a25bf8/tb323fu-linux-11a25bf89b65fff48112a91a0b25bc247e7736d8/userspace/platform/systemd/system/tb323fu-audio.service /tb323fu-audio/tb323fu-audio.service
+COPY devices/lenovo-tb323fu/kernel/tb323fu-linux-11a25bf8/tb323fu-linux-11a25bf89b65fff48112a91a0b25bc247e7736d8/userspace/platform/etc/tb323fu/audio.conf /tb323fu-audio/audio.conf
+COPY devices/lenovo-tb323fu/firmware/audio/ /tb323fu-audio/firmware/
+COPY devices/lenovo-tb323fu/rootfs/usr/libexec/tb323fu/tb323fu-speaker-gain /tb323fu-audio/tb323fu-speaker-gain
+COPY devices/lenovo-tb323fu/rootfs/usr/lib/systemd/user/tb323fu-speaker-gain.service /tb323fu-audio/tb323fu-speaker-gain.service
+COPY devices/lenovo-tb323fu/rootfs/usr/share/tb323fu/pipewire/tb323fu-speakers-protection.json /tb323fu-audio/tb323fu-speakers-protection.json
+COPY devices/lenovo-tb323fu/rootfs/usr/share/wireplumber/wireplumber.conf.d/61-tb323fu-speakers-dsp.conf /tb323fu-audio/61-tb323fu-speakers-dsp.conf
+# TB710FU: the unit's own DSP, GPU zap, touch and amplifier firmware, verified
+# at build time against devices/lenovo-tb710fu/firmware/SHA256SUMS and
+# installed at the paths its device tree names.
+COPY devices/lenovo-tb710fu/firmware/ /tb710fu-firmware/
+# Selected SM8850 companions come from Freedom Control; shared defaults and
+# performance helpers remain owned by this repository.
+COPY decky/freedom-control/system_files/usr/libexec/armada/armada-powerd /system_files/usr/libexec/armada/armada-powerd
+COPY decky/freedom-control/system_files/usr/lib/armada/devices/lenovo-tb323fu.conf /system_files/usr/lib/armada/devices/lenovo-tb323fu.conf
+COPY decky/freedom-control/system_files/usr/share/armada/power-profiles-SM8850.conf /system_files/usr/share/armada/power-profiles-SM8850.conf
 
 FROM ${BASE_IMAGE} AS armada-rootfs
 ARG ARMADA_VERSION=unknown
 LABEL org.opencontainers.image.version="${ARMADA_VERSION}"
+# CI sets the published labels through the chunkah config; this one is for
+# local builds, so build-edl-package-local can pass the image's revision on.
+ARG ARMADA_REVISION=unknown
+LABEL org.opencontainers.image.revision="${ARMADA_REVISION}"
 
 RUN --mount=type=bind,from=ctx,source=/,target=/ctx \
     --mount=type=bind,from=steam-bootstrap,source=/steam-bootstrap,target=/packages/steam-bootstrap \
@@ -114,7 +221,6 @@ RUN --mount=type=bind,from=ctx,source=/,target=/ctx \
     --mount=type=bind,from=gamescope-session,source=/rpms,target=/packages/gamescope-session \
     --mount=type=bind,from=gamescope-session-steam,source=/rpms,target=/packages/gamescope-session-steam \
     --mount=type=bind,from=kwin,source=/rpms,target=/packages/kwin \
-    --mount=type=bind,from=plasma-mobile,source=/rpms,target=/packages/plasma-mobile \
     --mount=type=bind,from=powerdevil,source=/rpms,target=/packages/powerdevil \
     --mount=type=bind,from=protontricks,source=/rpms,target=/packages/protontricks \
     --mount=type=bind,from=kernel,source=/kernel,target=/packages/kernel \
@@ -132,8 +238,10 @@ RUN --mount=type=bind,from=ctx,source=/,target=/ctx \
     --mount=type=bind,from=armada-rgb,source=/rpms,target=/packages/armada-rgb \
     --mount=type=bind,from=umtp-responder,source=/rpms,target=/packages/umtp-responder \
     --mount=type=bind,from=kshim-tools,source=/kshim-tools,target=/packages/kshim-tools \
-    --mount=type=bind,from=decky-build,source=/build/armada-control/dist,target=/packages/decky-dist \
+    --mount=type=bind,from=btop-cn,source=/rpms,target=/packages/btop-cn \
+    --mount=type=bind,from=decky-build,source=/build/freedom-control/dist,target=/packages/decky-dist \
     --mount=type=bind,from=decky-build,source=/build/armada-store/dist,target=/packages/decky-store-dist \
+    --mount=type=secret,id=decky_releases,target=/run/secrets/decky_releases,required=false \
     --mount=type=cache,dst=/var/cache \
     --mount=type=cache,dst=/var/log \
     --mount=type=tmpfs,dst=/tmp \

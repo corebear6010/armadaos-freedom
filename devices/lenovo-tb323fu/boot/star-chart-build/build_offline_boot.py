@@ -20,6 +20,7 @@ import argparse
 import configparser
 import gzip
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -401,6 +402,44 @@ def args_out_raw():
     return OUT
 
 
+def verify_boot_signatures(stock_boot_path, final_boot, repacker, avbtool):
+    final = read_bytes(final_boot, "signed boot")
+    final_kernel_size = parse_boot_header(final)["kernel_size"]
+    _, _, _, ois, _, _, _ = struct.unpack(">4sIIQQQ28s", final[-64:])
+    set_stage("avb")
+    spec = importlib.util.spec_from_file_location("tb323fu_signed_repacker", repacker)
+    signer = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(signer)
+    signature_verification = signer.verify_signed_metadata(
+        stock_boot_path, final_boot, avbtool)
+    verify_log = os.path.join(LOGS, "signed_metadata_verification.json")
+    with open(verify_log, "w", encoding="utf-8") as handle:
+        json.dump(signature_verification, handle, indent=2)
+        handle.write("\n")
+    kernel_end = 4096 + align_up(final_kernel_size, 4096)
+    expected_ois = kernel_end + signature_verification["gki_signature_bytes"]
+    check("avb:original_image_size", ois == expected_ois,
+          "ois=%d expected=%d" % (ois, expected_ois))
+    check("boot:kernel-padding",
+          not any(final[4096 + final_kernel_size:kernel_end]),
+          "non-zero kernel padding")
+    check("avb:signed-metadata", signature_verification["signed_metadata_preserved"] and
+          signature_verification["signature_valid"], "signed metadata verification failed")
+    run([sys.executable, "-B", avbtool, "info_image", "--image", final_boot],
+        "avbtool_info_image")
+    info_log = os.path.join(LOGS, "avbtool_info_image.stdout")
+    with open(info_log, encoding="utf-8", errors="replace") as handle:
+        info_text = handle.read()
+    algorithm_match = re.search(r"^\s*Algorithm:\s*(\S+)", info_text, re.M)
+    check("avb:algorithm-line", algorithm_match is not None,
+          "no anchored Algorithm line in info_image output")
+    check("avb:original-signed-algorithm",
+          algorithm_match.group(1) == signature_verification["metadata_algorithm"] and
+          algorithm_match.group(1) != "NONE", "signed algorithm changed")
+
+    return signature_verification, verify_log, info_log
+
+
 def run_driver(inputs, default_entry=DEFAULT_ENTRY):
     prepare_environment(inputs)
     default_label, default_index = DEFAULT_ENTRY_TARGETS[default_entry]
@@ -427,8 +466,9 @@ def run_driver(inputs, default_entry=DEFAULT_ENTRY):
           "header_size=%d" % boot["header_size"])
     check("stock_boot:ramdisk_size", boot["ramdisk_size"] == 0,
           "ramdisk_size=%d" % boot["ramdisk_size"])
-    check("stock_boot:signature_size", boot["signature_size"] == 0,
-          "signature_size=%d" % boot["signature_size"])
+    check("stock_boot:signature_size", boot["signature_size"] <=
+          len(stock_boot) - 4096 - align_up(boot["kernel_size"], 4096),
+          "GKI signature_size exceeds the partition")
     kernel_size = boot["kernel_size"]
     check("stock_boot:kernel_size",
           kernel_size != 0 and 4096 + kernel_size <= len(stock_boot),
@@ -989,8 +1029,6 @@ def run_driver(inputs, default_entry=DEFAULT_ENTRY):
     raw_exceeds_boot_partition = len(raw) > BOOT_SIZE
 
     set_stage("boot")
-    # avbtool resolves the hash descriptor's partition name (boot) relative
-    # to this directory and extension when verifying the embedded payload.
     final_boot = os.path.join(OUT, "boot.img")
     repack_report = os.path.join(OUT, "repack_report.json")
     run([sys.executable, "-B", repacker,
@@ -1010,8 +1048,9 @@ def run_driver(inputs, default_entry=DEFAULT_ENTRY):
           "version=%d" % final_boot_header["version"])
     check("boot:ramdisk_size", final_boot_header["ramdisk_size"] == 0,
           "ramdisk_size=%d" % final_boot_header["ramdisk_size"])
-    check("boot:signature_size", final_boot_header["signature_size"] == 0,
-          "signature_size=%d" % final_boot_header["signature_size"])
+    check("boot:signature_size", final_boot_header["signature_size"] ==
+          struct.unpack_from("<I", stock_boot, 1580)[0],
+          "GKI signature_size changed")
     check("boot:header-prefix", final[0:8] == stock_boot[0:8],
           "first 8 bytes changed")
     check("boot:header-body", final[12:4096] == stock_boot[12:4096],
@@ -1031,45 +1070,8 @@ def run_driver(inputs, default_entry=DEFAULT_ENTRY):
         ">4sIIQQQ28s", footer)
     check("avb:footer-magic", avb_magic == AVB_MAGIC, repr(avb_magic))
     check("avb:footer-major", avb_major == 1, "%d" % avb_major)
-    expected_ois = 4096 + align_up(len(gz_bytes), 4096)
-    check("avb:original_image_size", ois == expected_ois,
-          "ois=%d expected=%d" % (ois, expected_ois))
-    check("avb:vbmeta-bounds",
-          vbs > 0 and vbo >= ois and vbo + vbs <= len(final) - 64,
-          "vbo=%d vbs=%d" % (vbo, vbs))
-    check("avb:payload-fits", 4096 + align_up(len(gz_bytes), 4096) <= ois,
-          "compressed payload does not fit before AVB")
-    check("boot:kernel-padding",
-          final[4096 + final_kernel_size:ois] == b"\x00" * (ois - 4096 - final_kernel_size),
-          "non-zero kernel padding")
-
-    stock_has_footer = len(stock_boot) >= 64 and stock_boot[-64:-60] == AVB_MAGIC
-    if stock_has_footer:
-        _sf = struct.unpack(">4sIIQQQ28s", stock_boot[-64:])
-        stock_orig_size, stock_vbo, stock_vbs = _sf[3], _sf[4], _sf[5]
-        check("avb:stock-vbmeta-size", stock_vbs > 0,
-              "stock footer vbmeta_size is zero")
-        check("avb:stock-vbmeta-bounds",
-              stock_vbo >= stock_orig_size and stock_vbo + stock_vbs <= len(stock_boot) - 64,
-              "stock footer vbmeta region out of bounds")
-        check("avb:fresh-metadata",
-              final[vbo:vbo + vbs] != stock_boot[stock_vbo:stock_vbo + stock_vbs],
-              "vbmeta block matches stale stock value")
-
-    set_stage("avb")
-    verify_log = os.path.join(LOGS, "avbtool_verify_image.stdout")
-    run([sys.executable, "-B", avbtool, "verify_image", "--image", final_boot],
-        "avbtool_verify_image")
-    run([sys.executable, "-B", avbtool, "info_image", "--image", final_boot],
-        "avbtool_info_image")
-    info_log = os.path.join(LOGS, "avbtool_info_image.stdout")
-    with open(info_log, encoding="utf-8", errors="replace") as handle:
-        info_text = handle.read()
-    algorithm_match = re.search(r"^\s*Algorithm:\s*(\S+)", info_text, re.M)
-    check("avb:algorithm-line", algorithm_match is not None,
-          "no anchored Algorithm line in info_image output")
-    check("avb:algorithm-none", algorithm_match.group(1) == "NONE",
-          "algorithm=%s" % algorithm_match.group(1))
+    signature_verification, verify_log, info_log = verify_boot_signatures(
+        inputs["stock_boot"], final_boot, repacker, avbtool)
 
     set_stage("recheck-sources")
     for key, path in inputs.items():
@@ -1161,16 +1163,21 @@ def run_driver(inputs, default_entry=DEFAULT_ENTRY):
             "repack_report": repack_report,
         },
         "avb": {
-            "algorithm": algorithm_match.group(1),
+            "algorithm": signature_verification["metadata_algorithm"],
             "original_image_size": ois,
             "vbmeta_offset": vbo,
             "vbmeta_size": vbs,
-            "verify_image_log": verify_log,
+            "signature_verification_log": verify_log,
+            "signed_metadata_preserved": True,
+            "signature_valid": True,
+            "content_digest_matches": signature_verification["content_digest_matches"],
             "info_image_log": info_log,
         },
         "caveats": [
-            "Offline byte-level round-trip plus official avbtool success does "
-            "NOT validate the ABL whole-gzip decompression output window.",
+            "Original signed metadata is preserved for the verified TB323FU ABL "
+            "chain; changed payloads are not newly OEM-signed or validated by generic AVB.",
+            "Offline byte-level round-trip does not validate the ABL whole-gzip "
+            "decompression output window.",
             "Android, Linux and diagnostic real-hardware boot behaviour and the "
             "visual boot menu are NOT validated.",
             "No deployment, no flashing and no reboot happened; a real device "

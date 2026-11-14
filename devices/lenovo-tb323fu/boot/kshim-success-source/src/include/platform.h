@@ -67,3 +67,11 @@ int kshim_platform_select_localized_settings(uint64_t fdt, const char *const *na
                                              uint32_t timeout_ms,
                                              uint64_t advanced_mask, size_t *selected);
 int kshim_platform_prepare_handoff(void);
+
+
+/* Bind a provisioned storage session before showing the settings menu.
+ * The session/devices outlive the menu; pass NULL before releasing them.
+ * Board matching uses actual device_info, never the user's model override.
+ * No hardware is initialized or provisioned by this binding. */
+struct kshim_settings_session;
+void kshim_platform_bind_settings(struct kshim_settings_session *session);

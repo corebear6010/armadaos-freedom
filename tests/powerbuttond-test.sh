@@ -13,6 +13,8 @@ if [[ "${ARMADA_POWERBUTTON_TEST_FIXTURE:-}" == 1 ]]; then
     armada_find_lid_dev() { return 1; }
     armada_lid_closed() { return 1; }
     steam_uri() { printf '%s\n' "$1" >"$tmp/fresh-consumed"; }
+    gamescope_sockets() { printf 'gamescope-0\n'; }
+    gamescope_screen() { printf '%s %s\n' "$1" "$2" >>"$tmp/screen-calls"; }
     evtest() {
         exec 9<>"$tmp/block"
         if [[ ! -e "$tmp/old-started" ]]; then
@@ -66,9 +68,11 @@ old_producer_pid="$(<"$tmp/old-producer-pid")"
 kill -USR1 "$daemon_pid"
 
 wait_for_file "$tmp/fresh-started"
-wait_for_file "$tmp/fresh-consumed"
+wait_for_file "$tmp/screen-calls"
 [[ "$(<"$tmp/daemon-pid")" == "$daemon_pid" ]]
-[[ "$(<"$tmp/fresh-consumed")" == shortpowerpress ]]
+# A short press only toggles the display; Steam's sleep URI must not be sent.
+[[ ! -e "$tmp/fresh-consumed" ]]
+grep -Fxq 'gamescope-0 1' "$tmp/screen-calls"
 fresh_producer_pid="$(<"$tmp/fresh-producer-pid")"
 [[ "$fresh_producer_pid" != "$old_producer_pid" ]]
 if kill -0 "$old_producer_pid" 2>/dev/null; then

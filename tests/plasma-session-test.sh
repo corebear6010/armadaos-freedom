@@ -17,16 +17,23 @@ fail() {
 
 source "$LIB"
 state="$tmp/state.toml"
-[[ "$(armada_plasma_shell "$state")" == desktop ]]
+# Missing or raw upstream state follows the Mobile default.
+[[ "$(armada_plasma_shell "$state")" == mobile ]]
 printf 'desktop_session = "armada-plasma.desktop"\n' >"$state"
 [[ "$(armada_plasma_shell "$state")" == desktop ]]
 printf '[x]\ndesktop_session="armada-plasma-mobile.desktop"\n' >"$state"
 [[ "$(armada_plasma_shell "$state")" == mobile ]]
 printf 'desktop_session = "plasma.desktop"\n' >"$state"
-[[ "$(armada_plasma_shell "$state")" == desktop ]]
+[[ "$(armada_plasma_shell "$state")" == mobile ]]
+printf 'desktop_session = "armada-plasma-unknown.desktop"\n' >"$state"
+[[ "$(armada_plasma_shell "$state")" == mobile ]]
 
 grep -qx 'Exec=/usr/libexec/armada/armada-plasma-session standalone' "$SESSIONS/armada-plasma.desktop"
 grep -qx 'Exec=/usr/libexec/armada/armada-plasma-session standalone mobile' "$SESSIONS/armada-plasma-mobile.desktop"
+standard_name="$(sed -n 's/^Name=//p' "$SESSIONS/armada-plasma.desktop")"
+mobile_name="$(sed -n 's/^Name=//p' "$SESSIONS/armada-plasma-mobile.desktop")"
+[[ -n "$standard_name" && -n "$mobile_name" && "$standard_name" != "$mobile_name" ]] ||
+    fail 'the standard and mobile session entries cannot be told apart'
 grep -qx 'exec /usr/libexec/armada/armada-plasma-session nested' "$ROOT/system_files/usr/bin/armada-nested-desktop"
 [[ -x "$ROOT/system_files/usr/bin/armada-nested-desktop" && -x "$SESSION" ]]
 [[ "$(<"$ROOT/system_files/usr/share/armada/plasma/nested/kwinrc")" == $'[Wayland]\nVirtualKeyboardMode=2' ]]

@@ -1727,6 +1727,7 @@
 	panel0: panel@0 {
 		compatible = "csot,pp8807hb1-1", "novatek,nt36536";
 		reg = <0>;
+		rotation = <270>;
 
 		reset-gpios = <&tlmm 98 GPIO_ACTIVE_LOW>;
 

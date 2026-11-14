@@ -2,12 +2,21 @@
 #include <asm/arm64_exception.h>
 #include <arm64_sysreg.h>
 #include <gicv3.h>
+#if (defined(CONFIG_KSHIM_STORAGE_ENTRY_PROBE) && CONFIG_KSHIM_STORAGE_ENTRY_PROBE) || \
+    (defined(CONFIG_KSHIM_UFS_NATIVE_IO) && CONFIG_KSHIM_UFS_NATIVE_IO)
+#include <storage_probe_io.h>
+#endif
 
 // Synchronous exception handler
 void arm64_synchronous_exception_handler(
     ARM64_EXCEPTION_CONTEXT *context,
     uint64_t exception_type)
 {
+#if (defined(CONFIG_KSHIM_STORAGE_ENTRY_PROBE) && CONFIG_KSHIM_STORAGE_ENTRY_PROBE) || \
+    (defined(CONFIG_KSHIM_UFS_NATIVE_IO) && CONFIG_KSHIM_UFS_NATIVE_IO)
+    if (arm64_storage_probe_fixup(context, exception_type))
+        return;
+#endif
     // Print registers
     printf_e("Synchronous exception occurred\n");
     // GP registers
@@ -36,7 +45,7 @@ void arm64_synchronous_exception_handler(
     {
         printf("0x%016lx\n", stack_ptr[i]);
     }
-    
+
     // Disable interrupts
     arm64_disable_interrupts();
     // Hang up when exception occurs

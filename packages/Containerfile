@@ -21,6 +21,15 @@ FROM scratch AS out-armada-rgb
 COPY --from=pkg-armada-rgb /work/out/ /rpms/
 
 
+FROM builder-base AS pkg-btop-cn
+COPY btop-cn/ /work/
+WORKDIR /work
+RUN ./build.sh && /src/scrub-scratch.sh
+
+FROM scratch AS out-btop-cn
+COPY --from=pkg-btop-cn /work/out/ /rpms/
+
+
 FROM builder-base AS pkg-armada-splash
 COPY armada-splash/ /work/
 WORKDIR /work
@@ -139,15 +148,6 @@ RUN ./build.sh && /src/scrub-scratch.sh
 
 FROM scratch AS out-scx-scheds
 COPY --from=pkg-scx-scheds /work/out/ /rpms/
-
-
-FROM builder-base AS pkg-plasma-mobile
-COPY plasma-mobile/ /work/
-WORKDIR /work
-RUN ./build.sh && /src/scrub-scratch.sh
-
-FROM scratch AS out-plasma-mobile
-COPY --from=pkg-plasma-mobile /work/out/ /rpms/
 
 
 FROM builder-base AS pkg-powerdevil

@@ -1,0 +1,484 @@
+#!/usr/bin/python3
+"""First-normal-boot growth guard for the direct EDL ROOT partition.
+
+The guard reads a read-only snapshot (findmnt/lsblk/blkid/sysfs data, never
+probing or writing the partition table), validates the exact
+ARMADA_BOOT/ARMADA_ROOT/ARMADA_BACKUP layout, and then performs the single
+permitted mutation, btrfs filesystem resize max /var. It never runs growpart,
+sfdisk, sgdisk, parted or repart, and it never writes GPT.
+
+Marker schema (schema 1):
+  {"schema": 1, "bootUuid": <GUID-D>, "rootUuid": <GUID-D>,
+   "minimumRootPartitionBytes": 63 GiB, "backupBytes": 2 GiB}
+"""
+
+import json
+import os
+import subprocess
+import sys
+import uuid
+
+GIB = 1 << 30
+
+BOOT_PARTITION_LABEL = "ARMADA_BOOT"
+ROOT_PARTITION_LABEL = "ARMADA_ROOT"
+BACKUP_PARTITION_LABEL = "ARMADA_BACKUP"
+
+EXPECTED_BOOT_BYTES = 1 * GIB
+MINIMUM_ROOT_PARTITION_BYTES = 63 * GIB
+BACKUP_PARTITION_BYTES = 2 * GIB
+
+PERMITTED_RESIZE_ARGV = ("btrfs", "filesystem", "resize", "max", "/var")
+
+VAR_MOUNT = "/var"
+SYSFS_BLOCK = "/sys/class/block"
+# sysfs reports partition start/size in fixed 512-byte units.
+SYSFS_SECTOR_BYTES = 512
+
+
+def _normalize_uuid(value):
+    """Return a lowercase canonical GUID or raise ValueError."""
+    if not isinstance(value, str):
+        raise ValueError("UUID must be a string")
+    try:
+        parsed = uuid.UUID(value)
+    except (ValueError, AttributeError, TypeError) as error:
+        raise ValueError(f"invalid UUID {value!r}") from error
+    text = str(parsed)
+    if text != value.lower():
+        raise ValueError(f"UUID is not canonical: {value!r}")
+    return text
+
+
+def _is_zero_uuid(value):
+    compact = value.replace("-", "")
+    return bool(compact) and set(compact) == {"0"}
+
+
+def _require_int(value, what):
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{what} must be an integer")
+    return value
+
+
+def _require_absolute_dev_path(value, what):
+    if not isinstance(value, str):
+        raise ValueError(f"{what} must be a string")
+    if not value.startswith("/dev/") or "\x00" in value:
+        raise ValueError(f"{what} must be an absolute device path")
+    normalized = os.path.normpath(value)
+    if normalized != value or not normalized.startswith("/dev/"):
+        raise ValueError(f"{what} is not a normalized device path")
+    return normalized
+
+
+def _validated_config(config):
+    if not isinstance(config, dict):
+        raise ValueError("config must be an object")
+    schema = _require_int(config.get("schema"), "config schema")
+    if schema != 1:
+        raise ValueError("config schema must be 1")
+    try:
+        boot_uuid = _normalize_uuid(config["bootUuid"])
+        root_uuid = _normalize_uuid(config["rootUuid"])
+    except KeyError as error:
+        raise ValueError(f"config missing {error.args[0]}") from error
+    for name, uuid in (("bootUuid", boot_uuid), ("rootUuid", root_uuid)):
+        if not uuid or _is_zero_uuid(uuid):
+            raise ValueError(f"config {name} must be a nonzero UUID")
+    if boot_uuid == root_uuid:
+        raise ValueError("config bootUuid and rootUuid must differ")
+    minimum = _require_int(
+        config.get("minimumRootPartitionBytes"), "minimumRootPartitionBytes"
+    )
+    backup = _require_int(config.get("backupBytes"), "backupBytes")
+    if minimum != MINIMUM_ROOT_PARTITION_BYTES:
+        raise ValueError(
+            f"minimumRootPartitionBytes must be {MINIMUM_ROOT_PARTITION_BYTES}"
+        )
+    if backup != BACKUP_PARTITION_BYTES:
+        raise ValueError(f"backupBytes must be {BACKUP_PARTITION_BYTES}")
+    return boot_uuid, root_uuid, minimum, backup
+
+
+def _validated_partition(record):
+    if not isinstance(record, dict):
+        raise ValueError("partition record must be an object")
+    path = _require_absolute_dev_path(record.get("path"), "partition path")
+    disk = _require_absolute_dev_path(record.get("disk"), "partition disk")
+    size = _require_int(record.get("sizeBytes"), "partition sizeBytes")
+    start = _require_int(record.get("startBytes"), "partition startBytes")
+    if size <= 0:
+        raise ValueError("partition sizeBytes must be positive")
+    if start < 0:
+        raise ValueError("partition startBytes must be nonnegative")
+    part_label = record.get("partLabel")
+    fs_type = record.get("fsType")
+    fs_uuid = record.get("fsUuid")
+    for name, value in (
+        ("partLabel", part_label),
+        ("fsType", fs_type),
+        ("fsUuid", fs_uuid),
+    ):
+        if not isinstance(value, str):
+            raise ValueError(f"partition {name} must be a string")
+    return {
+        "path": path,
+        "disk": disk,
+        "startBytes": start,
+        "sizeBytes": size,
+        "partLabel": part_label.strip(),
+        "fsType": fs_type.strip().lower(),
+        "fsUuid": fs_uuid.strip(),
+    }
+
+
+def _select_partition(partitions, label):
+    matches = [item for item in partitions if item["partLabel"] == label]
+    if len(matches) != 1:
+        raise ValueError(
+            f"expected exactly one {label} partition, found {len(matches)}"
+        )
+    return matches[0]
+
+
+def validate_growth_target(config, mount, partitions):
+    """Return the unique ROOT device path for the normalized snapshot.
+
+    config is the parsed marker, mount is {target, fsType, fsUuid, fsRoot}
+    and partitions is a list of {path, disk, startBytes, sizeBytes, partLabel,
+    fsType, fsUuid} using 512-byte sysfs units. /var must be the btrfs
+    subvolume with the marker rootUuid; the tail layout must be exactly
+    ext4 ARMADA_BOOT (1 GiB, bootUuid) followed by ARMADA_ROOT (>=63 GiB)
+    followed by ARMADA_BACKUP (exactly 2 GiB) with no overlap or later
+    partition. Ambiguity, wrong UUID/label/type/disk/order/size or overlap
+    raises ValueError. Pure: performs no I/O.
+    """
+    boot_uuid, root_uuid, minimum_root, _ = _validated_config(config)
+
+    if not isinstance(mount, dict):
+        raise ValueError("mount must be an object")
+    target = mount.get("target")
+    fs_type = mount.get("fsType")
+    fs_root = mount.get("fsRoot")
+    for name, value in (("target", target), ("fsType", fs_type), ("fsRoot", fs_root)):
+        if not isinstance(value, str):
+            raise ValueError(f"mount {name} must be a string")
+    normalized_target = target.rstrip("/") or "/"
+    normalized_root = fs_root.rstrip("/") or "/"
+    if normalized_target != VAR_MOUNT or normalized_root != VAR_MOUNT:
+        raise ValueError("/var must be mounted with filesystem root /var")
+    if fs_type.strip().lower() != "btrfs":
+        raise ValueError("/var must be mounted as btrfs")
+    if _normalize_uuid(mount.get("fsUuid")) != root_uuid:
+        raise ValueError("/var mount UUID does not match the marker rootUuid")
+
+    if not isinstance(partitions, list):
+        raise ValueError("partitions must be a list")
+    records = [_validated_partition(item) for item in partitions]
+    seen_paths = set()
+    for record in records:
+        if record["path"] in seen_paths:
+            raise ValueError(f"duplicate partition path {record['path']}")
+        seen_paths.add(record["path"])
+
+    boot = _select_partition(records, BOOT_PARTITION_LABEL)
+    root = _select_partition(records, ROOT_PARTITION_LABEL)
+    backup = _select_partition(records, BACKUP_PARTITION_LABEL)
+
+    if not (boot["disk"] == root["disk"] == backup["disk"]):
+        raise ValueError("boot, root and backup must share one parent disk")
+
+    if boot["fsType"] != "ext4":
+        raise ValueError("ARMADA_BOOT must be ext4")
+    if _normalize_uuid(boot["fsUuid"]) != boot_uuid:
+        raise ValueError("ARMADA_BOOT UUID does not match the marker bootUuid")
+    if boot["sizeBytes"] != EXPECTED_BOOT_BYTES:
+        raise ValueError(f"ARMADA_BOOT must be exactly {EXPECTED_BOOT_BYTES} bytes")
+
+    if root["fsType"] != "btrfs":
+        raise ValueError("ARMADA_ROOT must be btrfs")
+    if _normalize_uuid(root["fsUuid"]) != root_uuid:
+        raise ValueError("ARMADA_ROOT UUID does not match the marker rootUuid")
+    if root["sizeBytes"] < minimum_root:
+        raise ValueError(
+            f"ARMADA_ROOT must be at least {minimum_root} bytes, got {root['sizeBytes']}"
+        )
+
+    if backup["sizeBytes"] != BACKUP_PARTITION_BYTES:
+        raise ValueError(f"ARMADA_BACKUP must be exactly {BACKUP_PARTITION_BYTES} bytes")
+
+    ordered = [item for item in records if item["disk"] == root["disk"]]
+    for previous, current in zip(ordered, ordered[1:]):
+        if current["startBytes"] < previous["startBytes"] + previous["sizeBytes"]:
+            raise ValueError("partitions overlap or are not in physical order")
+
+    tail = ordered[-3:]
+    if [item["path"] for item in tail] != [boot["path"], root["path"], backup["path"]]:
+        raise ValueError("boot, root and backup must be the final partition tail")
+
+    return root["path"]
+
+
+def _field(record, name):
+    for key, value in record.items():
+        if str(key).lower() == name:
+            return value if isinstance(value, str) else ""
+    return ""
+
+
+def _run_json(argv):
+    completed = subprocess.run(
+        argv,
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        payload = json.loads(completed.stdout)
+    except ValueError as error:
+        raise ValueError(f"unparsable output from {argv[0]}") from error
+    if not isinstance(payload, dict):
+        raise ValueError(f"unexpected output from {argv[0]}")
+    return payload
+
+
+def _read_sysfs_integer(node, attribute):
+    path = os.path.join(SYSFS_BLOCK, node, attribute)
+    try:
+        with open(path, "r", encoding="ascii") as handle:
+            text = handle.read().strip()
+    except OSError as error:
+        raise ValueError(f"cannot read {path}") from error
+    if not text.isdigit():
+        raise ValueError(f"invalid value in {path}")
+    return int(text)
+
+
+def _mount_device(source):
+    if not source.startswith("/dev/"):
+        raise ValueError(f"/var source {source!r} is not a device")
+    device = os.path.realpath(source)
+    if not device.startswith("/dev/"):
+        raise ValueError(f"/var source {source!r} does not resolve to a device")
+    node = os.path.basename(device)
+    if not node or not os.path.exists(os.path.join(SYSFS_BLOCK, node, "partition")):
+        raise ValueError(f"{device} is not a partition device")
+    return device, node
+
+
+def _parent_disk(node):
+    node_dir = os.path.realpath(os.path.join(SYSFS_BLOCK, node))
+    parent = os.path.basename(os.path.dirname(node_dir))
+    if not parent or not os.path.isdir(os.path.join(SYSFS_BLOCK, parent)):
+        raise ValueError(f"cannot determine parent disk of {node}")
+    return parent
+
+
+def _read_mount():
+    """Return (mount record, device path, sysfs node) for the /var mount."""
+    payload = _run_json(
+        [
+            "findmnt",
+            "--json",
+            "--mountpoint",
+            VAR_MOUNT,
+            "--output",
+            "TARGET,SOURCE,FSTYPE,UUID,FSROOT",
+        ]
+    )
+    entries = payload.get("filesystems")
+    if isinstance(entries, dict):
+        entries = [entries]
+    if not isinstance(entries, list) or len(entries) != 1:
+        raise ValueError(f"expected exactly one {VAR_MOUNT} mount")
+    entry = entries[0]
+    if not isinstance(entry, dict):
+        raise ValueError("invalid mount record")
+
+    source = _field(entry, "source").strip()
+    if source.endswith("]") and "[" in source:
+        source = source[: source.rfind("[")]
+    source = source.strip()
+    device, node = _mount_device(source)
+
+    return {
+        "target": _field(entry, "target") or VAR_MOUNT,
+        "fsType": _field(entry, "fstype").strip().lower(),
+        "fsUuid": _field(entry, "uuid").strip(),
+        "fsRoot": _field(entry, "fsroot").strip() or "/",
+    }, device, node
+
+
+def _blkid_probe(path):
+    completed = subprocess.run(
+        ["blkid", "-p", "-o", "export", path],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        return "", ""
+    values = {}
+    for line in completed.stdout.splitlines():
+        key, separator, value = line.partition("=")
+        if separator:
+            values[key.strip().upper()] = value.strip()
+    return values.get("TYPE", "").strip().lower(), values.get("UUID", "").strip()
+
+
+def read_snapshot(config):
+    """Return (mount, partitions) from read-only system data.
+
+    mount is the actual /var mount record; partitions are normalized records
+    with path, disk, startBytes, sizeBytes, partLabel, fsType, fsUuid read
+    with documented 512-byte sysfs start/size units. No writes or retries.
+    """
+    mount, device, node = _read_mount()
+    disk_name = _parent_disk(node)
+    disk_path = "/dev/" + disk_name
+
+    payload = _run_json(
+        [
+            "lsblk",
+            "--json",
+            "--list",
+            "--paths",
+            "--output",
+            "PATH,PKNAME,TYPE,PARTLABEL,FSTYPE,UUID",
+        ]
+    )
+    devices = payload.get("blockdevices")
+    if not isinstance(devices, list):
+        raise ValueError("unexpected lsblk output")
+
+    partitions = []
+    for entry in devices:
+        if not isinstance(entry, dict):
+            raise ValueError("invalid lsblk record")
+        if _field(entry, "type").strip().lower() != "part":
+            continue
+        path = _field(entry, "path").strip()
+        parent = os.path.basename(_field(entry, "pkname").strip().rstrip("/"))
+        if parent != disk_name:
+            continue
+        path = _require_absolute_dev_path(path, "lsblk path")
+        part_node = os.path.basename(path)
+        start = _read_sysfs_integer(part_node, "start")
+        size = _read_sysfs_integer(part_node, "size")
+        partitions.append(
+            {
+                "path": path,
+                "disk": disk_path,
+                "startBytes": start * SYSFS_SECTOR_BYTES,
+                "sizeBytes": size * SYSFS_SECTOR_BYTES,
+                "partLabel": _field(entry, "partlabel").strip(),
+                "fsType": _field(entry, "fstype").strip().lower(),
+                "fsUuid": _field(entry, "uuid").strip(),
+            }
+        )
+
+    partitions.sort(key=lambda item: (item["startBytes"], item["path"]))
+
+    root_record = _select_partition(partitions, ROOT_PARTITION_LABEL)
+    if os.path.realpath(root_record["path"]) != device:
+        raise ValueError(
+            "ARMADA_ROOT partition does not back the actual /var mount"
+        )
+
+    for record in partitions:
+        if record["partLabel"] not in (BOOT_PARTITION_LABEL, ROOT_PARTITION_LABEL):
+            continue
+        fs_type, fs_uuid = _blkid_probe(record["path"])
+        record["fsType"] = fs_type
+        record["fsUuid"] = fs_uuid
+
+    for record in partitions:
+        if record["partLabel"] != ROOT_PARTITION_LABEL:
+            continue
+        if mount["fsType"] == "btrfs" and _normalize_uuid(mount["fsUuid"]) != _normalize_uuid(
+            record["fsUuid"]
+        ):
+            raise ValueError("/var btrfs UUID disagrees with the ARMADA_ROOT probe")
+
+    return mount, partitions
+
+
+def run_resize(argv):
+    """Execute exactly argv without a shell, raising on nonzero exit."""
+    command = tuple(argv)
+    if command != PERMITTED_RESIZE_ARGV:
+        raise ValueError(f"refusing resize command {list(command)}")
+    subprocess.run(list(command), check=True)
+
+
+def _write_success_state(state_path, root_path, root_uuid):
+    parent = os.path.dirname(os.path.abspath(state_path)) or "."
+    os.makedirs(parent, exist_ok=True)
+    payload = (
+        json.dumps(
+            {
+                "schema": 1,
+                "status": "success",
+                "rootPath": root_path,
+                "rootUuid": root_uuid,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    )
+    temporary = state_path + ".tmp"
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        handle.write(payload)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temporary, state_path)
+    try:
+        directory = os.open(parent, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+
+def run_guarded_growth(config_path, state_path):
+    """Validate, resize once and record success state.
+
+    Returns False if state_path already records success. Otherwise snapshots
+    read-only, validates the target, runs run_resize(PERMITTED_RESIZE_ARGV)
+    and only then creates state_path, returning True. A failed resize leaves
+    the success state absent, does not retry and is not reported as success.
+    """
+    if os.path.exists(state_path):
+        return False
+
+    with open(config_path, "r", encoding="utf-8") as handle:
+        config = json.load(handle)
+    if not isinstance(config, dict):
+        raise ValueError("config must be an object")
+
+    mount, partitions = read_snapshot(config)
+    root_path = validate_growth_target(config, mount, partitions)
+    root_uuid = _normalize_uuid(config["rootUuid"])
+
+    run_resize(PERMITTED_RESIZE_ARGV)
+    _write_success_state(state_path, root_path, root_uuid)
+    return True
+
+
+def main(argv):
+    if len(argv) != 2:
+        print("usage: armada-edl-grow-root CONFIG STATE", file=sys.stderr)
+        return 2
+    run_guarded_growth(argv[0], argv[1])
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

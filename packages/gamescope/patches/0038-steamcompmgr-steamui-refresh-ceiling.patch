@@ -1,0 +1,460 @@
+diff --git a/src/Utils/SteamUIRefresh.h b/src/Utils/SteamUIRefresh.h
+new file mode 100644
+index 0000000..2f2c125
+--- /dev/null
++++ b/src/Utils/SteamUIRefresh.h
+@@ -0,0 +1,76 @@
++#pragma once
++
++#include <algorithm>
++#include <cstdint>
++#include <span>
++
++#include "../refresh_rate.h"
++
++namespace gamescope
++{
++    // Native Steam UI refresh policy.
++    //
++    // The Steam main UI gets a 60Hz ceiling on the internal panel, with VRR off
++    // and 60Hz explicitly listed by the connector. That ceiling is a maximum,
++    // never a forced rate: a slower base mode is left alone, no frames are
++    // generated to reach it and nothing idles in a repaint loop. The request
++    // and the supported value are policy, not applied Hz. Every helper returns
++    // its "no preference" result when the policy does not hold.
++
++    // 60 iff the internal panel is native output, VRR is off and 60Hz is listed.
++    inline uint32_t SteamUIRefreshSupported( bool nativeInternalOutput, bool activeVRR, std::span<const uint32_t> validRates )
++    {
++        if ( !nativeInternalOutput || activeVRR )
++            return 0;
++
++        for ( uint32_t rate : validRates )
++            if ( rate == 60 )
++                return 60;
++
++        return 0;
++    }
++
++    // Request + support + focus: the 60Hz policy cap applies. This is a ceiling
++    // on the UI, not the mode in use and not an applied Hz.
++    inline uint32_t SteamUIRefreshTarget( uint32_t requestedHz, uint32_t supportedHz, bool mainSteamFocused )
++    {
++        if ( requestedHz == 60 && supportedHz == 60 && mainSteamFocused )
++            return 60;
++
++        return 0;
++    }
++
++    // Maximum FPS for the Steam window, not a promise that it runs at 60.
++    inline int SteamUIWindowTargetFPS( uint32_t activeUIHz, bool targetSteamWindow, int originalGameFPS )
++    {
++        if ( activeUIHz == 60 && targetSteamWindow )
++            return 60;
++
++        return originalGameFPS;
++    }
++
++    // Final output rate for a paint under the policy ceiling. The base mode is
++    // whatever was already chosen; the ceiling may only lower it. A 30Hz or
++    // 50Hz base mode is not raised, and no mode is selected here.
++    inline int SteamUIOutputRefreshRate( uint32_t policyCapHz, int originalBaseHz )
++    {
++        // Lower only: the ceiling never raises an existing 30/50Hz mode.
++        if ( policyCapHz == 60 )
++            return std::min( originalBaseHz, 60 );
++
++        return originalBaseHz;
++    }
++
++    // Refresh cycle for a window's presentation feedback under the policy
++    // ceiling. "No faster than 60Hz" leaves a window that already paces itself
++    // slower on its own period.
++    inline uint64_t SteamUIWindowRefreshCycle( uint32_t policyCapHz, bool targetSteamWindow, uint64_t actualAppRefreshCycle, uint64_t originalWindowRefreshCycle )
++    {
++        // No faster than 60Hz: a window already pacing itself slower keeps its
++        // own period. Both operands are uint64_t so std::max has one type.
++        if ( policyCapHz == 60 && targetSteamWindow )
++            return std::max( actualAppRefreshCycle, uint64_t{ mHzToRefreshCycle( ConvertHztomHz( 60 ) ) } );
++
++        return originalWindowRefreshCycle;
++    }
++}
+diff --git a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
+index 7f1cf97..861156d 100644
+--- a/src/steamcompmgr.cpp
++++ b/src/steamcompmgr.cpp
+@@ -102,6 +102,7 @@
+ #include "BufferMemo.h"
+ #include "vrclient_detect.h"
+ #include "Utils/Process.h"
++#include "Utils/SteamUIRefresh.h"
+ 
+ #include "wlr_begin.hpp"
+ #include "wlr/types/wlr_pointer_constraints_v1.h"
+@@ -498,6 +499,11 @@ gamescope::ConVar<bool> cv_hdr_enabled{ "hdr_enabled", false, "Whether or not HD
+ gamescope::ConVar<bool> cv_hdr_content_driven{ "hdr_content_driven", false, "Only drive a panel in HDR while an HDR app is running." };
+ bool g_bHDRItmEnable = false;
+ int g_nCurrentRefreshRate_CachedValue = 0;
++// Native Steam UI 60Hz policy. The request comes from the Steam side, the
++// supported value is only what the current output allows for it. Neither
++// means anything has been applied yet.
++static uint32_t g_uSteamUIRefreshRateRequested = 0;
++static uint32_t g_uSteamUIRefreshRateSupported_CachedValue = 0;
+ 
+ // Follows the panel backlight over sysfs for panels that ignore it in PQ. steamcompmgr thread only.
+ class CBacklightWatcher final : public gamescope::IWaitable
+@@ -1363,6 +1369,60 @@ window_is_steam( steamcompmgr_win_t *w )
+ 	return w && ( w->isSteamLegacyBigPicture || w->appID == 769 );
+ }
+ 
++// Native Steam UI 60Hz policy glue. Capability only describes the current
++// output, never whether the mode has actually been applied.
++static uint32_t
++steamui_supported_refresh()
++{
++	gamescope::IBackend *pBackend = GetBackend();
++	if ( !pBackend || !pBackend->IsSessionBased() )
++		return 0;
++
++	gamescope::IBackendConnector *pConnector = pBackend->GetCurrentConnector();
++	if ( !pConnector || pConnector->IsHeadless() )
++		return 0;
++
++	const bool bNativeInternal = pConnector->GetScreenType() == gamescope::GAMESCOPE_SCREEN_TYPE_INTERNAL;
++
++	return gamescope::SteamUIRefreshSupported( bNativeInternal, pConnector->IsVRRActive(), pConnector->GetValidDynamicRefreshRates() );
++}
++
++// The 60Hz policy cap while the focused main Steam UI sits on the output we
++// drive. Overlay and input focus over a game are deliberately not looked at.
++// This is a ceiling, not the rate the UI actually runs at.
++static uint32_t
++steamui_active_refresh( global_focus_t *pFocus )
++{
++	if ( !pFocus || pFocus != GetCurrentFocus() )
++		return 0;
++
++	gamescope::IBackendConnector *pCurrent = GetBackend() ? GetBackend()->GetCurrentConnector() : nullptr;
++	gamescope::IBackendConnector *pConnector = pFocus->pVirtualConnector.get();
++	if ( !pConnector )
++		pConnector = pCurrent;
++
++	// A focus painted onto another output must not inherit this output's policy.
++	if ( !pConnector || !pCurrent || pConnector->GetConnectorID() != pCurrent->GetConnectorID() )
++		return 0;
++
++	steamcompmgr_win_t *pFocusWindow = pFocus->focusWindow;
++	const bool bMainSteamFocused = window_is_steam( pFocusWindow ) && !pFocusWindow->isSteamStreamingClientVideo;
++
++	return gamescope::SteamUIRefreshTarget( g_uSteamUIRefreshRateRequested, steamui_supported_refresh(), bMainSteamFocused );
++}
++
++// The only window the policy covers is the focused main Steam UI window itself.
++// Its FPS and refresh cycle stay maximums, never a forced frame rate.
++static bool
++steamui_is_active_window( steamcompmgr_win_t *w )
++{
++	global_focus_t *pFocus = GetCurrentFocus();
++	if ( !pFocus || !w || w != pFocus->focusWindow )
++		return false;
++
++	return steamui_active_refresh( pFocus ) == 60;
++}
++
+ static bool
+ window_is_vr_scene_app( steamcompmgr_win_t *w )
+ {
+@@ -3509,6 +3569,13 @@ paint_all( global_focus_t *pFocus, bool async )
+ 			? nDynamicRefreshHz
+ 			: int( rates[ rates.size() - 1 ] );
+ 
++		// The policy caps the base mode chosen above, it never picks one. The
++		// Steam UI is focused over whatever the game profile asked for.
++		const uint32_t uSteamUIPolicyCap = steamui_active_refresh( pFocus );
++		const bool bSteamUIActive = uSteamUIPolicyCap == 60;
++
++		nTargetRefreshHz = gamescope::SteamUIOutputRefreshRate( uSteamUIPolicyCap, nTargetRefreshHz );
++
+ 		uint64_t now = get_time_in_nanos();
+ 
+ 		// The actual output hz generated by the mode, could be off by one either side, due to rounding.
+@@ -3523,7 +3590,9 @@ paint_all( global_focus_t *pFocus, bool async )
+ 		{
+ 			g_uDynamicRefreshEqualityTime = now;
+ 		}
+-		else if ( g_uDynamicRefreshEqualityTime + g_uDynamicRefreshDelay < now )
++		// Entering the UI mode is an explicit request, so it does not wait out the
++		// hysteresis that stops game modes flickering. Leaving it keeps the delay.
++		else if ( bSteamUIActive || g_uDynamicRefreshEqualityTime + g_uDynamicRefreshDelay < now )
+ 		{
+ 			GetBackend()->HackTemporarySetDynamicRefresh( nTargetRefreshHz );
+ 		}
+@@ -6920,15 +6989,23 @@ static bool steamcompmgr_should_vblank_window( bool bShouldLimitFPS, uint64_t vb
+ 	bool bSendCallback = true;
+ 
+ 	int nRefreshHz = gamescope::ConvertmHzToHz( g_nNestedRefresh ? g_nNestedRefresh : g_nOutputRefresh );
+-	int nTargetFPS = g_nSteamCompMgrTargetFPS;
++
++	// The Steam UI window is capped locally, so a game's 0/30/40 cap can
++	// neither leak into it nor be invented by it.
++	const bool bSteamUIWindow = steamui_is_active_window( w );
++	const int nTargetFPS = gamescope::SteamUIWindowTargetFPS( steamui_active_refresh( GetCurrentFocus() ), bSteamUIWindow, g_nSteamCompMgrTargetFPS );
++	const bool bLimitFPS = bShouldLimitFPS || bSteamUIWindow;
++	const uint64_t nLimitedCycle = bSteamUIWindow
++		? gamescope::mHzToRefreshCycle( gamescope::ConvertHztomHz( 60 ) )
++		: g_SteamCompMgrLimitedAppRefreshCycle;
+ 
+ 	if ( GetBackend()->GetCurrentConnector() && GetBackend()->GetCurrentConnector()->IsVRRActive() )
+ 	{
+-		bool bCloseEnough = std::abs( g_nSteamCompMgrTargetFPS - nRefreshHz ) < 2;
++		bool bCloseEnough = std::abs( nTargetFPS - nRefreshHz ) < 2;
+ 
+-		if ( g_nSteamCompMgrTargetFPS && bShouldLimitFPS && w && !bCloseEnough )
++		if ( nTargetFPS && bLimitFPS && w && !bCloseEnough )
+ 		{
+-			uint64_t schedule = w->last_commit_first_latch_time + g_SteamCompMgrLimitedAppRefreshCycle;
++			uint64_t schedule = w->last_commit_first_latch_time + nLimitedCycle;
+ 
+ 			static constexpr uint64_t k_ulVRRScheduleFudge = 200'000; // 0.2ms
+ 			if ( now + k_ulVRRScheduleFudge < schedule )
+@@ -6944,11 +7021,11 @@ static bool steamcompmgr_should_vblank_window( bool bShouldLimitFPS, uint64_t vb
+ 	}
+ 	else
+ 	{
+-		if ( g_nSteamCompMgrTargetFPS && bShouldLimitFPS && nRefreshHz > nTargetFPS )
++		if ( nTargetFPS && bLimitFPS && nRefreshHz > nTargetFPS )
+ 		{
+ 			if ( cv_limiter_use_elapsed_time && w )
+ 			{
+-				uint64_t schedule = w->last_commit_first_latch_time + g_SteamCompMgrLimitedAppRefreshCycle;
++				uint64_t schedule = w->last_commit_first_latch_time + nLimitedCycle;
+ 				uint64_t fudge = g_SteamCompMgrAppRefreshCycle / 2;
+ 
+ 				if ( now + fudge < schedule )
+@@ -7393,6 +7470,28 @@ handle_property_notify(xwayland_ctx_t *ctx, XPropertyEvent *ev)
+ 		g_nSteamCompMgrTargetFPS = get_prop( ctx, ctx->root, ctx->atoms.gamescopeFPSLimit, 0 );
+ 		update_runtime_info();
+ 	}
++	if ( ev->atom == ctx->atoms.gamescopeSteamUIRefreshRate )
++	{
++		// Only the Steam XWayland server's root owns this request. Every other
++		// value, including a removed property, means "don't do this".
++		gamescope_xwayland_server_t *pRootServer = wlserver_get_xwayland_server( 0 );
++		if ( pRootServer && ctx == pRootServer->ctx.get() && ev->window == ctx->root )
++		{
++			uint32_t uRequested = get_prop( ctx, ctx->root, ctx->atoms.gamescopeSteamUIRefreshRate, 0 );
++			uRequested = uRequested == 60 ? 60 : 0;
++			if ( uRequested != g_uSteamUIRefreshRateRequested )
++			{
++				// The UI policy must take effect from a static frame, but a request
++				// change with a game front must not reset that game's hysteresis.
++				const bool bWasUIActive = steamui_active_refresh( GetCurrentFocus() ) == 60;
++				g_uSteamUIRefreshRateRequested = uRequested;
++				const bool bIsUIActive = steamui_active_refresh( GetCurrentFocus() ) == 60;
++				if ( bWasUIActive || bIsUIActive )
++					g_uDynamicRefreshEqualityTime = 0;
++				hasRepaint = true;
++			}
++		}
++	}
+ 	for (int i = 0; i < gamescope::GAMESCOPE_SCREEN_TYPE_COUNT; i++)
+ 	{
+ 		if ( ev->atom == ctx->atoms.gamescopeDynamicRefresh[i] )
+@@ -8310,10 +8409,18 @@ void handle_presented_for_window( steamcompmgr_win_t* w )
+ 
+ 	uint64_t next_refresh_time = g_SteamCompMgrVBlankTime.schedule.ulTargetVBlank;
+ 
+-	uint64_t refresh_cycle = g_nSteamCompMgrTargetFPS && steamcompmgr_window_should_limit_fps( w )
++	// Original limiter/app cycle for this window first, then the UI ceiling on
++	// top of it. The ceiling may only slow a window down, never speed it up.
++	const uint64_t nOriginalWindowRefreshCycle = g_nSteamCompMgrTargetFPS && steamcompmgr_window_should_limit_fps( w )
+ 		? g_SteamCompMgrLimitedAppRefreshCycle
+ 		: g_SteamCompMgrAppRefreshCycle;
+ 
++	uint64_t refresh_cycle = gamescope::SteamUIWindowRefreshCycle(
++		steamui_active_refresh( GetCurrentFocus() ),
++		steamui_is_active_window( w ),
++		g_SteamCompMgrAppRefreshCycle,
++		nOriginalWindowRefreshCycle );
++
+ 	commit_t *lastCommit = get_window_last_done_commit_peek(w);
+ 	if (lastCommit)
+ 	{
+@@ -9218,6 +9325,8 @@ void init_xwayland_ctx(uint32_t serverId, gamescope_xwayland_server_t *xwayland_
+ 
+ 	ctx->atoms.gamescopeDisplayRefreshRateFeedback = XInternAtom( ctx->dpy, "GAMESCOPE_DISPLAY_REFRESH_RATE_FEEDBACK", false );
+ 	ctx->atoms.gamescopeDisplayDynamicRefreshBasedOnGamePresence = XInternAtom( ctx->dpy, "GAMESCOPE_DISPLAY_DYNAMIC_REFRESH_BASED_ON_GAME_PRESENCE", false );
++	ctx->atoms.gamescopeSteamUIRefreshRate = XInternAtom( ctx->dpy, "GAMESCOPE_STEAMUI_REFRESH_RATE", false );
++	ctx->atoms.gamescopeSteamUIRefreshRateSupported = XInternAtom( ctx->dpy, "GAMESCOPE_STEAMUI_REFRESH_RATE_SUPPORTED", false );
+ 
+ 	ctx->atoms.gamescopeMainSteamVROverlay = XInternAtom( ctx->dpy, "GAMESCOPE_MAIN_STEAMVR_OVERLAY", false );
+ 	ctx->atoms.steamosTouchPointerEmulation = XInternAtom( ctx->dpy, "_STEAMOS_TOUCH_POINTER_EMULATION", false );
+@@ -9355,6 +9464,20 @@ void update_vrr_atoms(xwayland_ctx_t *root_ctx, bool force, bool* needs_flush =
+ 			*needs_flush = true;
+ 	}
+ 
++	// Capability for the Steam UI policy on the current output. This says
++	// nothing about whether the mode is applied; that is the real feedback atom.
++	uint32_t uSteamUIRefreshSupported = steamui_supported_refresh();
++	if ( uSteamUIRefreshSupported != g_uSteamUIRefreshRateSupported_CachedValue || force )
++	{
++		// Xlib consumes a C long per 32-bit element on LP64, not the uint32_t.
++		unsigned long ulSteamUIRefreshSupported = uSteamUIRefreshSupported;
++		XChangeProperty(root_ctx->dpy, root_ctx->root, root_ctx->atoms.gamescopeSteamUIRefreshRateSupported, XA_CARDINAL, 32, PropModeReplace,
++			(unsigned char *)&ulSteamUIRefreshSupported, 1 );
++		g_uSteamUIRefreshRateSupported_CachedValue = uSteamUIRefreshSupported;
++		if (needs_flush)
++			*needs_flush = true;
++	}
++
+ 	// Don't update this in-sync with DRM vrr usage.
+ 	// Keep this as a preference, starting with off.
+ 	if ( force )
+@@ -10761,7 +10884,12 @@ steamcompmgr_main(int argc, char **argv)
+ 
+ 			FlipType eFlipType = FlipType::Normal;
+ 
+-			if ( bForceSyncFlip )
++			// The Steam UI ceiling composites on vblank, so once the physical
++			// mode is at 60Hz its paints are bounded without touching vblank or
++			// tearing. It never asks for a repaint on its own.
++			const bool bSteamUIActive = steamui_active_refresh( pPaintFocus ) == 60;
++
++			if ( bForceSyncFlip || bSteamUIActive )
+ 				eFlipType = FlipType::Normal;
+ 			else if ( bVRR )
+ 				eFlipType = FlipType::VRR;
+diff --git a/src/xwayland_ctx.hpp b/src/xwayland_ctx.hpp
+index 7b39ecb..3610baf 100644
+--- a/src/xwayland_ctx.hpp
++++ b/src/xwayland_ctx.hpp
+@@ -252,6 +252,8 @@ struct xwayland_ctx_t final : public gamescope::IWaitable
+ 
+ 		Atom gamescopeDisplayRefreshRateFeedback;
+ 		Atom gamescopeDisplayDynamicRefreshBasedOnGamePresence;
++		Atom gamescopeSteamUIRefreshRate;
++		Atom gamescopeSteamUIRefreshRateSupported;
+ 
+ 		Atom gamescopeMainSteamVROverlay;
+ 		Atom steamosTouchPointerEmulation;
+diff --git a/tests/meson.build b/tests/meson.build
+index a748009..e59fe24 100644
+--- a/tests/meson.build
++++ b/tests/meson.build
+@@ -8,7 +8,7 @@ endforeach
+ 
+ gamescope_tests = executable(
+ 	'gamescope_tests',
+-	unittest_src + ['test_convar.cpp', 'test_focus_placement.cpp', 'test_mangoapp_config.cpp', 'test_mangoapp_control.cpp', 'test_mode_list.cpp', 'test_process.cpp', 'test_upscale.cpp', 'test_utils_parsers.cpp', 'test_utils_string.cpp', 'test_utils_vblank_schedule.cpp', 'test_vrclient_detect.cpp', 'test_display_lookup.cpp', 'test_drm_composition.cpp', 'test_client_format_policy.cpp', 'test_edid.cpp'],
++	unittest_src + ['test_convar.cpp', 'test_focus_placement.cpp', 'test_mangoapp_config.cpp', 'test_mangoapp_control.cpp', 'test_mode_list.cpp', 'test_process.cpp', 'test_upscale.cpp', 'test_utils_parsers.cpp', 'test_utils_steam_ui_refresh.cpp', 'test_utils_string.cpp', 'test_utils_vblank_schedule.cpp', 'test_vrclient_detect.cpp', 'test_display_lookup.cpp', 'test_drm_composition.cpp', 'test_client_format_policy.cpp', 'test_edid.cpp'],
+ 	include_directories: [srcdir, sol2_include],
+ 	dependencies: [catch2_dep, luajit_dep, cap_dep, displayinfo_dep, drm_dep, glm_dep, wlroots_dep],
+ 	cpp_args: gamescope_cpp_args,
+@@ -24,6 +24,7 @@ test('mode_list', gamescope_tests, args: ['[mode_list]'])
+ test('upscale', gamescope_tests, args: ['[upscale]'])
+ test('utils/parsers', gamescope_tests, args: ['[parsers]'])
+ test('utils/process', gamescope_tests, args: ['[process]'], depends: [reaper_test_helper])
++test('utils/steam_ui_refresh', gamescope_tests, args: ['[steam_ui_refresh]'])
+ test('utils/string', gamescope_tests, args: ['[string]'])
+ test('utils/vblank_schedule', gamescope_tests, args: ['[vblank_schedule]'])
+ test('vrclient_detect', gamescope_tests, args: ['[vrclient_detect]'])
+diff --git a/tests/test_utils_steam_ui_refresh.cpp b/tests/test_utils_steam_ui_refresh.cpp
+new file mode 100644
+index 0000000..f5a1e5a
+--- /dev/null
++++ b/tests/test_utils_steam_ui_refresh.cpp
+@@ -0,0 +1,93 @@
++#include <catch2/catch_test_macros.hpp>
++
++#include "Utils/SteamUIRefresh.h"
++
++#include <cstdint>
++#include <initializer_list>
++#include <vector>
++
++using namespace gamescope;
++
++TEST_CASE("Steam UI 60Hz supported needs native internal output, no VRR and a listed 60Hz rate", "[steam_ui_refresh]") {
++	std::vector<uint32_t> y700Rates = { 30, 60, 90, 120 };
++	REQUIRE( SteamUIRefreshSupported( true, false, y700Rates ) == 60 );
++
++	// Native internal output and non-VRR are both hard gates.
++	REQUIRE( SteamUIRefreshSupported( false, false, y700Rates ) == 0 );
++	REQUIRE( SteamUIRefreshSupported( true, true, y700Rates ) == 0 );
++	REQUIRE( SteamUIRefreshSupported( false, true, y700Rates ) == 0 );
++
++	// No usable connector rates at all.
++	std::vector<uint32_t> noRates;
++	REQUIRE( SteamUIRefreshSupported( true, false, noRates ) == 0 );
++
++	// 60 must be listed explicitly, not inferred from any other rate.
++	for ( const std::vector<uint32_t> &rates : { std::vector<uint32_t>{ 30, 90, 120 }, std::vector<uint32_t>{ 120 }, std::vector<uint32_t>{ 90, 144, 160 }, std::vector<uint32_t>{ 59, 61 } } )
++		REQUIRE( SteamUIRefreshSupported( true, false, rates ) == 0 );
++}
++
++TEST_CASE("Steam UI refresh target only triggers on a focused 60Hz request over a 60Hz mode", "[steam_ui_refresh]") {
++	REQUIRE( SteamUIRefreshTarget( 60, 60, true ) == 60 );
++
++	// Focus and supported-mode gates.
++	REQUIRE( SteamUIRefreshTarget( 60, 60, false ) == 0 );
++	REQUIRE( SteamUIRefreshTarget( 60, 90, true ) == 0 );
++	REQUIRE( SteamUIRefreshTarget( 60, 120, true ) == 0 );
++	REQUIRE( SteamUIRefreshTarget( 90, 60, true ) == 0 );
++
++	// Only 60 is an enable request; these values never enable the override.
++	for ( uint32_t requestedHz : { 0u, 30u, 90u, 120u, 144u } ) {
++		REQUIRE( SteamUIRefreshTarget( requestedHz, requestedHz, true ) == 0 );
++		REQUIRE( SteamUIRefreshTarget( requestedHz, 60, true ) == 0 );
++	}
++}
++
++TEST_CASE("Steam UI window target caps only the focused Steam window and preserves game rates", "[steam_ui_refresh]") {
++	// A focused Steam window with a 60Hz UI targets 60 regardless of the game.
++	for ( int originalGameFPS : { 0, 30, 40, 120 } )
++		REQUIRE( SteamUIWindowTargetFPS( 60, true, originalGameFPS ) == 60 );
++
++	// Unfocused Steam windows and non-60 UI rates leave every window rate intact.
++	for ( int originalGameFPS : { 0, 30, 40, 120 } ) {
++		REQUIRE( SteamUIWindowTargetFPS( 60, false, originalGameFPS ) == originalGameFPS );
++		for ( uint32_t activeUIHz : { 0u, 30u, 90u, 120u } )
++			REQUIRE( SteamUIWindowTargetFPS( activeUIHz, true, originalGameFPS ) == originalGameFPS );
++	}
++}
++
++TEST_CASE("Steam UI output rate ceiling is a maximum and never raises a slower base mode", "[steam_ui_refresh]") {
++	// The ceiling only lowers. A 30Hz or 50Hz base mode stays where it is.
++	REQUIRE( SteamUIOutputRefreshRate( 60, 30 ) == 30 );
++	REQUIRE( SteamUIOutputRefreshRate( 60, 50 ) == 50 );
++	REQUIRE( SteamUIOutputRefreshRate( 60, 60 ) == 60 );
++	REQUIRE( SteamUIOutputRefreshRate( 60, 90 ) == 60 );
++	REQUIRE( SteamUIOutputRefreshRate( 60, 165 ) == 60 );
++
++	// No policy, or a policy other than 60, leaves the base mode alone.
++	REQUIRE( SteamUIOutputRefreshRate( 0, 30 ) == 30 );
++	REQUIRE( SteamUIOutputRefreshRate( 0, 50 ) == 50 );
++	REQUIRE( SteamUIOutputRefreshRate( 0, 60 ) == 60 );
++	REQUIRE( SteamUIOutputRefreshRate( 0, 165 ) == 165 );
++	REQUIRE( SteamUIOutputRefreshRate( 90, 30 ) == 30 );
++	REQUIRE( SteamUIOutputRefreshRate( 90, 165 ) == 165 );
++}
++
++TEST_CASE("Steam UI window cycle ceiling keeps a window that already runs slower", "[steam_ui_refresh]") {
++	// A 50Hz window keeps 20ms and a 30Hz window keeps 33.3ms.
++	REQUIRE( SteamUIWindowRefreshCycle( 60, true, 20000000, 33333333 ) == 20000000 );
++	REQUIRE( SteamUIWindowRefreshCycle( 60, true, 33333333, 8333333 ) == 33333333 );
++
++	// At 60Hz or faster the ceiling bounds the window to the 60Hz period.
++	REQUIRE( SteamUIWindowRefreshCycle( 60, true, 16666667, 16666667 ) == 16666667 );
++	REQUIRE( SteamUIWindowRefreshCycle( 60, true, 11111111, 11111111 ) == 16666667 );
++	REQUIRE( SteamUIWindowRefreshCycle( 60, true, 6060606, 6060606 ) == 16666667 );
++}
++
++TEST_CASE("Steam UI window cycle ceiling is ignored when disabled or not the UI window", "[steam_ui_refresh]") {
++	for ( uint64_t originalCycle : { 25000000ull, 33333333ull, 8333333ull } ) {
++		// Disabled policy, another window, and a non-60 policy all keep the original.
++		REQUIRE( SteamUIWindowRefreshCycle( 0, true, 11111111, originalCycle ) == originalCycle );
++		REQUIRE( SteamUIWindowRefreshCycle( 60, false, 11111111, originalCycle ) == originalCycle );
++		REQUIRE( SteamUIWindowRefreshCycle( 90, true, 11111111, originalCycle ) == originalCycle );
++	}
++}

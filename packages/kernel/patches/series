@@ -119,6 +119,7 @@ v9_20260729_qualcomm_crypto_qce_runtime_pm_interconnect.patch
 0533-scsi-ufs-ufs-qcom-enable-only-lane-clocks-in-lane-clock-apis.patch
 0535-scsi-ufs-core-fast-abort-unsupported-query-idns.patch
 0536-scsi-ufs-core-dynamically-disable-timestamp-on-unsupported-devices.patch
+0537-scsi-ufs-core-fix-clock-scaling-command-deadlock.patch
 0512-PCI-qcom-skip-L23-ready-poll-on-SM8550.patch
 0513-PCI-qcom-honour-an-opp-suspend-opp-as-the-non-s2ram-memory-floor.patch
 0522-PCI-host-common-let-only-endpoints-veto-d3cold.patch
@@ -223,6 +224,7 @@ v2_20260420_neil_armstrong_arm64_qcom_sm8650_misc_enhancements.patch
 0528-ASoC-qcom-sc8280xp-suspend-the-card-and-its-streams.patch
 0529-ASoC-qdsp6-q6apm-fail-the-graph-open-when-the-DSP-rejects-it.patch
 0530-ASoC-qdsp6-release-AudioReach-graphs-across-system-suspend.patch
+0531-ASoC-core-wait-for-the-deferred-resume-before-unbinding-the-card.patch
 0532-hwmon-pwm-fan-optionally-run-the-fan-while-charging-in-s2idle.patch
 
 # ============== SM8750 Elden (Lenovo Legion Y700 Gen4 / TB322FC) display ==============
@@ -313,3 +315,32 @@ v2_20260420_neil_armstrong_arm64_qcom_sm8650_misc_enhancements.patch
 0221-drm-msm-dp-baldur-retrain-after-quick-replug.patch
 0222-arm64-dts-qcom-kaanapali-describe-ufs-mcq.patch
 0223-Bluetooth-qca-baldur-preserve-configured-address.patch
+0224-drm-msm-dpu-sm8850-inline-rotation.patch
+0225-drm-msm-sm8850-output-lut.patch
+0226-drm-msm-whole-gpu-busy-time.patch
+
+# ============== SM8650 Lenovo Xiaoxin Pad Pro GT (TB710FU) ==============
+# Authored against the full Armada set above, so this section follows all of it.
+0710-dt-bindings-backlight-sy7758-add-follower.patch
+0711-backlight-sy7758-follower-chips.patch
+0712-drm-panel-add-novatek-nt36532.patch
+0713-drm-msm-dsi-bonded-trigger-on-dsi0.patch
+0714-drm-msm-dsi-bootloader-controller-phy-state.patch
+0715-drm-msm-dpu-dsc-width-round-up.patch
+0716-drm-msm-a6xx-a750-without-ifpc.patch
+0720-input-touchscreen-add-nt36532-spi.patch
+0721-input-nt36532-scan-for-the-pen-by-default.patch
+0722-input-nt36532-parent-the-input-devices-to-the-SPI-device.patch
+0730-Bluetooth-btqca-dt-bd-address.patch
+0731-power-sequencing-qcom-wcn-reset-pulse.patch
+0732-wifi-ath12k-wcn7850-workarounds.patch
+0740-ASoC-qcom-common-add-DAI-node-TDM-slot-helpers.patch
+0741-ASoC-qcom-common-distinguish-missing-and-invalid-TDM-slots.patch
+0742-ASoC-qcom-q6apm-lpass-dais-add-TDM-DAI-operations.patch
+0743-ASoC-qcom-audioreach-configure-TDM-sink-endpoint.patch
+0744-ASoC-qcom-q6apm-four-speakers.patch
+0745-ASoC-dt-bindings-qcom-sm8250-add-tb710fu-card.patch
+0746-ASoC-qcom-sc8280xp-add-tb710fu-card.patch
+0227-Bluetooth-qca-add-WCN7861-peripheral-setup.patch
+0228-drm-msm-dpu-qseed-v11-rotation-boundaries.patch
+0229-drm-msm-dpu-program-source-split-order.patch

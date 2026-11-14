@@ -171,3 +171,57 @@ jobs:
             echo "${REF}"
             echo '```'
           } >> "${GITHUB_STEP_SUMMARY}"
+
+  # Publishes are only useful if an anonymous consumer can read every package
+  # the image build will reference. Covers cache hits and newly built packages.
+  public_read:
+    name: Verify packages are publicly readable
+    needs: [prepare, build]
+    if: >-
+      !cancelled() && needs.prepare.result == 'success' &&
+      (needs.build.result == 'success' || needs.build.result == 'skipped')
+    runs-on: ubuntu-24.04
+    permissions: {}
+    steps:
+      - name: Install skopeo
+        run: command -v skopeo >/dev/null || { sudo apt-get update && sudo apt-get install -y skopeo; }
+
+      - name: Inspect every package anonymously
+        env:
+          PKG_REFS: ${{ needs.prepare.outputs.build_args }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          failed=0
+          checked=0
+          while IFS= read -r line; do
+            [ -n "${line}" ] || continue
+            ref="${line#*=}"
+            [ -n "${ref}" ] || { echo "::error::empty ref in '${line}'"; failed=1; continue; }
+            checked=$((checked + 1))
+            if out=$(skopeo inspect --no-creds --raw "docker://${ref}" 2>&1); then
+              echo "::notice::public: ${ref}"
+            else
+              failed=1
+              echo "::error::not anonymously readable: ${ref}"
+              printf '%s\n' "${out}" | sed 's/^/    /'
+            fi
+          done <<< "${PKG_REFS}"
+          if [ "${checked}" -eq 0 ]; then
+            echo "::error::no package refs to verify (expected build_args from prepare)"
+            failed=1
+          fi
+          if [ "${failed}" -ne 0 ]; then
+            {
+              echo "### Package images are not all anonymously readable"
+              echo "A failure can mean the package is private, missing, or the"
+              echo "registry could not be reached; the message above does not"
+              echo "prove which. GitHub Packages images start private even when"
+              echo "the repository is public. Each package image must be made"
+              echo "Public separately under the owner's Packages settings, then"
+              echo "rerun this workflow. See"
+              echo "https://docs.github.com/en/packages/learn-github-packages/configuring-a-packages-access-control-and-visibility"
+            } >> "${GITHUB_STEP_SUMMARY}"
+            exit 1
+          fi
+          echo "::notice::all ${checked} package refs are anonymously readable"

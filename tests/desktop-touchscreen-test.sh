@@ -71,6 +71,8 @@ odin_touchscreen="$(device_env_value 'AYN Odin 2' ARMADA_PRIMARY_TOUCHSCREEN)"
 assert_eq "$(device_env_value 'AYN Odin 2' ARMADA_DEVICE_ID)" ayn-odin-2 'odin device id'
 assert_eq "$odin_calibration" '' 'odin calibration empty'
 assert_eq "$odin_touchscreen" '' 'odin touchscreen empty'
+assert_eq "$(device_env_value 'AYN Odin 2' ARMADA_GAMEMODE_PEN_TOUCH)" '' 'odin pen bridge off'
+assert_eq "$(device_env_value 'Lenovo Legion Tab Y700 5th Gen' ARMADA_GAMEMODE_PEN_TOUCH)" '' 'tb323fu pen bridge off'
 
 # --- device-env: Lenovo Legion Y700 Gen4 devicetree identification ----------
 # The Gen4 board is identified from a real devicetree directory: an exact
@@ -124,10 +126,9 @@ assert_eq "$(dt_value ARMADA_DEVICE_ID)" lenovo-tb322fc 'elden compatible device
 assert_eq "$(dt_value ARMADA_DEVICE_NAME)" 'Lenovo Legion Y700 Gen4' 'elden compatible device name'
 assert_eq "$(dt_value ARMADA_SOC_CLASS)" SM8750 'elden compatible soc class'
 assert_eq "$(dt_value ARMADA_PRIMARY_TOUCHSCREEN)" "$TOUCHSCREEN" 'elden compatible touchscreen'
-# Orientation and calibration defaults stay unchanged, but Gen4 uses the
-# accepted rotation shader fallback.
-assert_eq "$(dt_value ARMADA_PANEL_ORIENTATION)" normal 'elden orientation default'
-assert_eq "$(dt_value ARMADA_GAMESCOPE_USE_ROTATION_SHADER)" 1 'elden rotation shader fallback'
+# Gen4 now pairs its 270-degree panel with Gamescope LEFT_UP.
+assert_eq "$(dt_value ARMADA_PANEL_ORIENTATION)" left 'elden hardware orientation'
+assert_eq "$(dt_value ARMADA_GAMESCOPE_USE_ROTATION_SHADER)" 0 'elden hardware rotation'
 assert_eq "$(dt_value ARMADA_DESKTOP_TOUCHSCREEN_CALIBRATION)" '' 'elden calibration empty'
 
 # The exact entry also matches when it is not the first compatible.
@@ -161,6 +162,34 @@ assert_eq "$(dt_value ARMADA_DEVICE_ID 'AYN Odin 3')" ayn-odin-3 'explicit model
 # The exact Gen4 model string is a fallback when no compatible is present.
 write_dt_model 'Lenovo Legion Y700 Gen4'
 assert_eq "$(dt_value ARMADA_DEVICE_ID)" lenovo-tb322fc 'gen4 fallback device id'
+
+# TB710FU: the exact compatible selects its profile, also behind qcom,sm8650.
+write_dt_model 'Some Unrecognized Board'
+write_dt_compatible 'lenovo,tb710fu' 'qcom,sm8650'
+assert_eq "$(dt_value ARMADA_DEVICE_ID)" lenovo-tb710fu 'tb710fu compatible device id'
+assert_eq "$(dt_value ARMADA_DEVICE_NAME)" 'Lenovo Xiaoxin Pad Pro GT (TB710FU)' 'tb710fu device name'
+assert_eq "$(dt_value ARMADA_SOC_CLASS)" SM8650 'tb710fu soc class'
+assert_eq "$(dt_value ARMADA_PRIMARY_TOUCHSCREEN)" "$TOUCHSCREEN" 'tb710fu touchscreen'
+assert_eq "$(dt_value ARMADA_BUILTIN_GAMEPAD)" 0 'tb710fu has no built-in gamepad'
+assert_eq "$(dt_value ARMADA_PANEL_ORIENTATION)" normal 'tb710fu orientation default'
+assert_eq "$(dt_value ARMADA_DESKTOP_TOUCHSCREEN_CALIBRATION)" '' 'tb710fu calibration empty'
+assert_eq "$(dt_value ARMADA_GAMEMODE_PEN_TOUCH)" NVTCapacitivePen 'tb710fu game mode pen bridge'
+write_dt_model 'Some Unrecognized Board'
+write_dt_compatible 'qcom,sm8650' 'lenovo,tb710fu'
+assert_eq "$(dt_value ARMADA_DEVICE_ID)" lenovo-tb710fu 'tb710fu second compatible device id'
+write_dt_model 'Some Unrecognized Board'
+write_dt_compatible 'lenovo,tb710fu-rev2' 'qcom,sm8650'
+assert_eq "$(dt_value ARMADA_DEVICE_ID)" unknown 'tb710fu-rev2 is not an exact match'
+# The model string alone also selects it.
+write_dt_model 'Lenovo Xiaoxin Pad Pro GT (TB710FU)'
+write_dt_compatible 'qcom,sm8650'
+assert_eq "$(dt_value ARMADA_DEVICE_ID)" lenovo-tb710fu 'tb710fu model fallback device id'
+# The compatible wins over a conflicting model; an explicit ARMADA_MODEL wins
+# over the compatible.
+write_dt_model 'AYN Odin 3'
+write_dt_compatible 'lenovo,tb710fu' 'qcom,sm8650'
+assert_eq "$(dt_value ARMADA_DEVICE_ID)" lenovo-tb710fu 'tb710fu compatible wins over model'
+assert_eq "$(dt_value ARMADA_DEVICE_ID 'AYN Odin 3')" ayn-odin-3 'explicit model over tb710fu compatible'
 
 # --- fixtures ---------------------------------------------------------------
 stub_bin="$TEST_ROOT/bin"

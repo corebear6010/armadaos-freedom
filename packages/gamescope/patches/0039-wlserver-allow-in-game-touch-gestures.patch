@@ -1,0 +1,1263 @@
+diff --git a/src/steamcompmgr.cpp b/src/steamcompmgr.cpp
+index 861156d..e1aff89 100644
+--- a/src/steamcompmgr.cpp
++++ b/src/steamcompmgr.cpp
+@@ -5559,7 +5559,8 @@ determine_and_apply_focus( global_focus_t *pFocus )
+ 
+ 				if ( win_surface(pFocus->inputFocusWindow) != nullptr && pFocus->cursor )
+ 				{
+-					wlserver_mousefocus( pFocus->inputFocusWindow->main_surface(), pFocus->cursor->x(), pFocus->cursor->y() );
++					wlserver_mousefocus( pFocus->inputFocusWindow->main_surface(), pFocus->cursor->x(), pFocus->cursor->y(),
++										 window_is_steam( pFocus->inputFocusWindow ) && !pFocus->inputFocusWindow->isSteamStreamingClientVideo );
+ 					focus_log.debugf( "Setting mouse focus to: %s (%x)", pFocus->inputFocusWindow->debug_name(), pFocus->inputFocusWindow->id() );
+ 				}
+ 
+diff --git a/src/wlserver.cpp b/src/wlserver.cpp
+index 0f548c6..8f498a5 100644
+--- a/src/wlserver.cpp
++++ b/src/wlserver.cpp
+@@ -96,6 +96,15 @@ bool pending_gesture_y = false;
+ bool pending_osk = false;
+ //#define GAMESCOPE_SWAPCHAIN_DEBUG
+ gamescope::ConVar<bool> cv_touch_gestures( "enable_touch_gestures", false, "Enable/Disable the usage of touch gestures" );
++
++// In-game swipes are on unless the environment explicitly turns them off.
++static bool touch_gestures_in_game_default()
++{
++	const char *pszEnv = getenv( "GAMESCOPE_TOUCH_GESTURES_IN_GAME" );
++	return !pszEnv || strcmp( pszEnv, "1" ) == 0;
++}
++
++gamescope::ConVar<bool> cv_touch_gestures_in_game( "enable_touch_gestures_in_game", touch_gestures_in_game_default(), "Enable/Disable edge swipes while a game has input focus" );
+ extern GamescopePanelOrientation g_DesiredInternalOrientation;
+ extern GamescopePanelOrientation g_DesiredExternalOrientation;
+ 
+@@ -391,13 +400,49 @@ void wlserver_open_steam_menu( bool qam )
+ 	if (!server)
+ 		return;
+ 
+-	uint32_t keycode = qam ? XK_2 : XK_1;
++	Display *dpy = server->get_xdisplay();
++	if ( !dpy )
++		return;
+ 
+-	XTestFakeKeyEvent(server->get_xdisplay(), XKeysymToKeycode( server->get_xdisplay(), XK_Control_L ), True, CurrentTime);
+-	XTestFakeKeyEvent(server->get_xdisplay(), XKeysymToKeycode( server->get_xdisplay(), keycode ), True, CurrentTime);
++	// XTest/libei re-routes synthetic input to the globally focused game, so
++	// deliver Ctrl+1/2 straight to the X11 focus window with XSendEvent instead.
++	Window focus = None;
++	int revert = 0;
++	XGetInputFocus( dpy, &focus, &revert );
++	if ( focus == None || focus == PointerRoot )
++		return;
+ 
+-	XTestFakeKeyEvent(server->get_xdisplay(), XKeysymToKeycode( server->get_xdisplay(), keycode ), False, CurrentTime);
+-	XTestFakeKeyEvent(server->get_xdisplay(), XKeysymToKeycode( server->get_xdisplay(), XK_Control_L ), False, CurrentTime);
++	KeyCode ctrl = XKeysymToKeycode( dpy, XK_Control_L );
++	KeyCode digit = XKeysymToKeycode( dpy, qam ? XK_2 : XK_1 );
++	if ( ctrl == 0 || digit == 0 )
++		return;
++
++	auto sendKey = [&]( KeyCode keycode, bool press, unsigned int state )
++	{
++		XEvent event = {};
++		event.xkey.type = press ? KeyPress : KeyRelease;
++		event.xkey.display = dpy;
++		event.xkey.window = focus;
++		event.xkey.root = DefaultRootWindow( dpy );
++		event.xkey.subwindow = None;
++		event.xkey.time = CurrentTime;
++		event.xkey.x = 0;
++		event.xkey.y = 0;
++		event.xkey.x_root = 0;
++		event.xkey.y_root = 0;
++		event.xkey.same_screen = True;
++		event.xkey.keycode = keycode;
++		event.xkey.state = state;
++		XSendEvent( dpy, focus, False, press ? KeyPressMask : KeyReleaseMask, &event );
++	};
++
++	sendKey( ctrl, true, 0 );
++	sendKey( digit, true, ControlMask );
++	sendKey( digit, false, ControlMask );
++	sendKey( ctrl, false, ControlMask );
++
++	// Dispatch now: this must not wait on unrelated Steam X11 traffic while a game has focus.
++	XFlush( dpy );
+ }
+ 
+ void wlserver_open_steam_osk(bool osk)
+@@ -3331,10 +3376,14 @@ static void wlserver_clampcursor()
+ 	wlserver.mouse_surface_cursory = std::clamp( wlserver.mouse_surface_cursory, 0.0, double( std::max( nHeight - 1, 0 ) ) );
+ }
+ 
+-void wlserver_mousefocus( struct wlr_surface *wlrsurface, int x /* = 0 */, int y /* = 0 */ )
++void wlserver_mousefocus( struct wlr_surface *wlrsurface, int x /* = 0 */, int y /* = 0 */, bool bMouseFocusIsSteam /* = false */ )
+ {
+ 	assert( wlserver_is_lock_held() );
+ 
++	// Keep this even when the surface is unchanged: the window behind it can
++	// become Steam UI without a new surface.
++	wlserver.mouse_focus_is_steam = bMouseFocusIsSteam;
++
+ 	if ( wlserver.mouse_focus_surface == wlrsurface )
+ 	{
+ 		wlserver_clampcursor();
+@@ -3835,10 +3884,71 @@ struct EdgeSwipe_t
+ };
+ static std::unordered_map<int, EdgeSwipe_t> g_EdgeSwipes;
+ 
++// Every finger on the panel, whatever click mode it went down with. Opening
++// the menu is postponed until this set is empty so the opening sequence of
++// native touch events is delivered in full.
++static std::set<int> g_TouchPhysicalIds;
++
++// A recognised swipe waits for the release: opening the menu mid-touch moves
++// the focused window's transform under the finger that is still down, after
++// which the game stops accepting taps. nSide == 0 means nothing is pending.
++struct EdgeSwipePending_t
++{
++	int nSide;
++	struct wlr_surface *pOriginSurface;
++};
++static EdgeSwipePending_t g_EdgeSwipePending = { 0, nullptr };
++static struct wl_event_source *g_EdgeSwipeTimer = nullptr;
++
++// Steam UI input answers to the master switch, game input also needs the child.
++static bool edge_swipe_enabled()
++{
++	return cv_touch_gestures && ( wlserver.mouse_focus_is_steam || cv_touch_gestures_in_game );
++}
++
++static int wlserver_edge_swipe_grace_proc( void * )
++{
++	// Recheck everything the pending dispatch depended on: a new contact, a
++	// disabled gate or a changed focus window all invalidate it.
++	if ( !g_TouchPhysicalIds.empty() || g_EdgeSwipePending.nSide == 0 )
++		return 0;
++
++	const int nSide = g_EdgeSwipePending.nSide;
++	struct wlr_surface *pOriginSurface = g_EdgeSwipePending.pOriginSurface;
++	g_EdgeSwipePending = { 0, nullptr };
++
++	if ( !edge_swipe_enabled() ||
++	     wlserver.mouse_focus_surface == nullptr ||
++	     wlserver.mouse_focus_surface != pOriginSurface )
++		return 0;
++
++	wlserver_open_steam_menu( nSide > 0 );
++	return 0;
++}
++
++static void wlserver_edge_swipe_disarm_timer()
++{
++	if ( g_EdgeSwipeTimer != nullptr )
++		wl_event_source_timer_update( g_EdgeSwipeTimer, 0 );
++}
++
++static bool wlserver_edge_swipe_arm_timer()
++{
++	if ( g_EdgeSwipeTimer == nullptr && wlserver.event_loop != nullptr )
++		g_EdgeSwipeTimer = wl_event_loop_add_timer( wlserver.event_loop, wlserver_edge_swipe_grace_proc, nullptr );
++
++	if ( g_EdgeSwipeTimer == nullptr )
++		return false;
++
++	// Same 100ms grace the touch plugin uses, so the client has finished the
++	// release before the focus window is replaced by the Steam menu.
++	return wl_event_source_timer_update( g_EdgeSwipeTimer, 100 ) == 0;
++}
++
+ static void wlserver_edge_swipe_down( int touch_id, double tx, double ty )
+ {
+ 	g_EdgeSwipes.erase( touch_id );
+-	if ( !cv_touch_gestures )
++	if ( !edge_swipe_enabled() )
+ 		return;
+ 
+ 	double flZone = g_nOutputWidth * cv_touch_gesture_edge_zone;
+@@ -3864,9 +3974,16 @@ static void wlserver_edge_swipe_motion( int touch_id, double tx, double ty )
+ 		return;
+ 
+ 	// Mostly horizontal: a scroll that starts near an edge is not a swipe.
++	if ( !edge_swipe_enabled() )
++		return;
+ 	swipe.bDone = true;
+-	if ( flInward > flAcross * 2.0 )
+-		wlserver_open_steam_menu( swipe.nSide > 0 );
++	if ( flInward > flAcross * 2.0 && g_EdgeSwipePending.nSide == 0 )
++	{
++		// Record, do not open: the first side of the physical sequence wins and
++		// the dispatch itself waits for the last finger to leave.
++		g_EdgeSwipePending.nSide = swipe.nSide;
++		g_EdgeSwipePending.pOriginSurface = wlserver.mouse_focus_surface;
++	}
+ }
+ 
+ void wlserver_touchmotion( double x, double y, int touch_id, uint32_t time, bool bAlwaysWarpCursor, gamescope::IBackendConnector* connector )
+@@ -3885,6 +4002,9 @@ void wlserver_touchmotion( double x, double y, int touch_id, uint32_t time, bool
+ 
+ 		tx *= g_nOutputWidth;
+ 		ty *= g_nOutputHeight;
++		// Edge swipes judge output-space positions, before window offset/scale.
++		const double flEdgeSwipeX = tx;
++		const double flEdgeSwipeY = ty;
+ 		tx += focusedWindowOffsetX;
+ 		ty += focusedWindowOffsetY;
+ 		tx *= focusedWindowScaleX;
+@@ -3911,8 +4031,6 @@ void wlserver_touchmotion( double x, double y, int touch_id, uint32_t time, bool
+ 
+ 			if ( bAlwaysWarpCursor )
+ 				wlserver_mousewarp( tx, ty, time, false );
+-
+-			wlserver_edge_swipe_motion( touch_id, tx, ty );
+ 		}
+ 		else if ( eMode == gamescope::TouchClickModes::Disabled )
+ 		{
+@@ -3928,6 +4046,10 @@ void wlserver_touchmotion( double x, double y, int touch_id, uint32_t time, bool
+ 
+ 			wlserver_mousewarp( tx, ty, time, false );
+ 		}
++
++		// Every non-Disabled mode keeps its own event handling above and can
++		// still start an edge swipe.
++		wlserver_edge_swipe_motion( touch_id, flEdgeSwipeX, flEdgeSwipeY );
+ 	}
+ 
+ 	bump_input_counter();
+@@ -3937,6 +4059,11 @@ void wlserver_touchdown( double x, double y, int touch_id, uint32_t time, gamesc
+ {
+ 	assert( wlserver_is_lock_held() );
+ 
++	// Track the contact before any early return below, including central
++	// touches that are not swipes. A new finger also cancels the grace window.
++	wlserver_edge_swipe_disarm_timer();
++	g_TouchPhysicalIds.insert( touch_id );
++
+ 	if ( wlserver.mouse_focus_surface != NULL )
+ 	{
+ 		double tx = x;
+@@ -3949,12 +4076,15 @@ void wlserver_touchdown( double x, double y, int touch_id, uint32_t time, gamesc
+ 
+ 		tx *= g_nOutputWidth;
+ 		ty *= g_nOutputHeight;
++		// Edge swipes judge output-space positions, before window offset/scale.
++		const double flEdgeSwipeX = tx;
++		const double flEdgeSwipeY = ty;
+ 		tx += focusedWindowOffsetX;
+ 		ty += focusedWindowOffsetY;
+ 		tx *= focusedWindowScaleX;
+ 		ty *= focusedWindowScaleY;
+ 
+-		wlserver_edge_swipe_down( touch_id, tx, ty );
++		wlserver_edge_swipe_down( touch_id, flEdgeSwipeX, flEdgeSwipeY );
+ 
+ 		gamescope::TouchClickMode eMode = GetBackend()->GetTouchClickMode();
+ 
+@@ -4035,6 +4165,30 @@ void wlserver_touchup( int touch_id, uint32_t time )
+ 	}
+ 
+ 	wlserver_drag_anchor_release();
++
++	g_TouchPhysicalIds.erase( touch_id );
++
++	// Only the last finger may hand the gesture over, and only once the native
++	// up/button releases above are queued and flushed to the client.
++	if ( g_TouchPhysicalIds.empty() && g_EdgeSwipePending.nSide != 0 )
++	{
++		bool bPending = edge_swipe_enabled() &&
++			wlserver.mouse_focus_surface != nullptr &&
++			wlserver.mouse_focus_surface == g_EdgeSwipePending.pOriginSurface;
++
++		if ( bPending )
++		{
++			wlr_seat_touch_notify_frame( wlserver.wlr.seat );
++			if ( wlserver.display != nullptr )
++				wl_display_flush_clients( wlserver.display );
++			bPending = wlserver_edge_swipe_arm_timer();
++		}
++
++		// A dropped pending gesture is discarded, never dispatched late.
++		if ( !bPending )
++			g_EdgeSwipePending = { 0, nullptr };
++	}
++
+ 	bump_input_counter();
+ }
+ 
+diff --git a/src/wlserver.hpp b/src/wlserver.hpp
+index 75071d6..5f9ccd6 100644
+--- a/src/wlserver.hpp
++++ b/src/wlserver.hpp
+@@ -135,6 +135,8 @@ struct wlserver_t {
+ 	} wlr;
+ 	
+ 	struct wlr_surface *mouse_focus_surface;
++	// Whether the mouse focus belongs to Steam UI rather than a game.
++	bool mouse_focus_is_steam = false;
+ 	struct wlr_surface *kb_focus_surface;
+ 	std::unordered_map<struct wlr_surface *, std::pair<int, int>> current_dropdown_surfaces;
+ 	double mouse_surface_cursorx = 0.0f;
+@@ -272,7 +274,7 @@ void wlserver_keyboardfocus( struct wlr_surface *surface, bool bConstrain = true
+ void wlserver_key( uint32_t key, bool press, uint32_t time );
+ void wlserver_set_keyboard_layout( const char *pszLayout );
+ 
+-void wlserver_mousefocus( struct wlr_surface *wlrsurface, int x = 0, int y = 0 );
++void wlserver_mousefocus( struct wlr_surface *wlrsurface, int x = 0, int y = 0, bool bMouseFocusIsSteam = false );
+ void wlserver_clear_dropdowns();
+ void wlserver_notify_dropdown( struct wlr_surface *wlrsurface, int nX, int nY );
+ void wlserver_mousemotion( double x, double y, uint32_t time );
+diff --git a/tests/test_in_game_swipes.py b/tests/test_in_game_swipes.py
+new file mode 100644
+index 0000000..27399c2
+--- /dev/null
++++ b/tests/test_in_game_swipes.py
+@@ -0,0 +1,682 @@
++#!/usr/bin/env python3
++"""Behavior tests for independent in-game touch swipes.
++
++The fixture compiles the production swipe callback bodies from src/wlserver.cpp;
++only the seat and backend glue is stubbed.
++"""
++import re
++import shutil
++import subprocess
++import tempfile
++import unittest
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[1]
++WLSOURCE = ROOT / "src/wlserver.cpp"
++
++PRELUDE = r"""
++#include <atomic>
++#include <cassert>
++#include <cmath>
++#include <cstddef>
++#include <cstdint>
++#include <cstdlib>
++#include <cstring>
++#include <iostream>
++#include <set>
++#include <string>
++#include <unordered_map>
++#include <utility>
++
++enum GamescopePanelOrientation
++{
++    GAMESCOPE_PANEL_ORIENTATION_0 = 0
++};
++
++namespace gamescope
++{
++template <typename T>
++struct ConVar
++{
++    T m_value;
++    ConVar( const char *, T value, const char * ) : m_value( value ) {}
++    operator T() const { return m_value; }
++    const T &Get() const { return m_value; }
++    ConVar &operator=( T value ) { m_value = value; return *this; }
++};
++
++enum TouchClickMode
++{
++    Hover = 0,
++    Left = 1,
++    Right = 2,
++    Middle = 3,
++    Passthrough = 4,
++    Disabled = 5,
++    Trackpad = 6,
++    TouchClickModeCount = 7
++};
++
++namespace TouchClickModes
++{
++constexpr TouchClickMode Disabled = gamescope::Disabled;
++constexpr TouchClickMode Passthrough = gamescope::Passthrough;
++constexpr TouchClickMode Left = gamescope::Left;
++constexpr TouchClickMode Right = gamescope::Right;
++constexpr TouchClickMode Middle = gamescope::Middle;
++constexpr TouchClickMode Hover = gamescope::Hover;
++constexpr TouchClickMode Trackpad = gamescope::Trackpad;
++}
++
++class IBackendConnector
++{
++public:
++    GamescopePanelOrientation GetCurrentOrientation() const
++    {
++        return GAMESCOPE_PANEL_ORIENTATION_0;
++    }
++};
++}
++
++constexpr int WLSERVER_BUTTON_COUNT = int( gamescope::TouchClickModeCount );
++
++constexpr int WL_POINTER_BUTTON_STATE_PRESSED = 1;
++constexpr int WL_POINTER_BUTTON_STATE_RELEASED = 0;
++
++struct wlr_surface {};
++struct wlr_seat {};
++struct wlserver_wl_surface_info { bool xdg_surface = false; };
++
++struct wl_display {};
++
++struct wl_event_source
++{
++    int ( *callback )( void * ) = nullptr;
++    void *data = nullptr;
++    long due_ms = -1;
++    bool armed = false;
++};
++
++struct wl_event_loop
++{
++    wl_event_source source;
++};
++
++struct wlserver_t
++{
++    wl_display *display = nullptr;
++    wl_event_loop *event_loop = nullptr;
++    wlr_surface *mouse_focus_surface = nullptr;
++    bool mouse_focus_is_steam = false;
++    double mouse_surface_cursorx = 0.0;
++    double mouse_surface_cursory = 0.0;
++    std::set<int> touch_down_ids;
++    bool button_held[WLSERVER_BUTTON_COUNT] = {};
++    struct { wlr_seat *seat = nullptr; } wlr;
++};
++static wlserver_t wlserver;
++
++static wl_display g_display;
++static wl_event_loop g_event_loop;
++static long g_simulated_ms = 0;
++
++// One timer, like the handoff grace: add_timer stores callback/data, a
++// positive timer_update arms it relative to the fake clock, and 0 disarms.
++static wl_event_source *wl_event_loop_add_timer( wl_event_loop *loop, int ( *callback )( void * ), void *data )
++{
++    loop->source.callback = callback;
++    loop->source.data = data;
++    loop->source.armed = false;
++    loop->source.due_ms = -1;
++    return &loop->source;
++}
++
++static int wl_event_source_timer_update( wl_event_source *source, int ms )
++{
++    if ( ms <= 0 )
++    {
++        source->armed = false;
++        source->due_ms = -1;
++    }
++    else
++    {
++        source->armed = true;
++        source->due_ms = g_simulated_ms + ms;
++    }
++    return 0;
++}
++
++static int wl_event_source_remove( wl_event_source *source )
++{
++    source->armed = false;
++    source->due_ms = -1;
++    source->callback = nullptr;
++    source->data = nullptr;
++    return 0;
++}
++
++static void tick( long ms )
++{
++    g_simulated_ms += ms;
++
++    wl_event_source *source = wlserver.event_loop ? &wlserver.event_loop->source : nullptr;
++    if ( source == nullptr || !source->armed || g_simulated_ms < source->due_ms )
++        return;
++
++    int ( *callback )( void * ) = source->callback;
++    void *data = source->data;
++    source->armed = false;
++    source->due_ms = -1;
++    if ( callback != nullptr )
++        callback( data );
++}
++
++static wlr_surface g_focus_surface;
++static wlr_surface g_other_surface;
++static wlserver_wl_surface_info g_focus_surface_info;
++static wlserver_wl_surface_info g_other_surface_info;
++
++static wlserver_wl_surface_info *get_wl_surface_info( wlr_surface *surface )
++{
++    if ( surface == &g_other_surface )
++        return &g_other_surface_info;
++    return &g_focus_surface_info;
++}
++
++static bool wlserver_is_lock_held() { return true; }
++static void bump_input_counter() {}
++
++void wlserver_open_steam_menu( bool qam )
++{
++    std::cout << "menu " << ( qam ? "qam" : "main" ) << "\n";
++}
++
++void apply_touchscreen_orientation( GamescopePanelOrientation, double *, double * ) {}
++
++static std::pair<int, int> wlserver_get_cursor_bounds()
++{
++    return { 1920, 1080 };
++}
++
++template <typename T>
++static T clamp( T value, T low, T high )
++{
++    return value < low ? low : ( value > high ? high : value );
++}
++
++static void wlserver_drag_anchor_apply( double &, double & ) {}
++static void wlserver_drag_anchor_release() {}
++
++void wlserver_mousewarp( double x, double y, uint32_t, bool )
++{
++    std::cout << "warp " << x << " " << y << "\n";
++}
++
++void wlserver_mousemotion( double dx, double dy, uint32_t )
++{
++    std::cout << "motion " << dx << " " << dy << "\n";
++}
++
++void wlr_seat_touch_notify_motion( wlr_seat *, uint32_t, int id, double x, double y )
++{
++    std::cout << "touch " << id << " " << x << " " << y << "\n";
++}
++
++void wlr_seat_touch_notify_down( wlr_seat *, wlr_surface *, uint32_t, int id, double x, double y )
++{
++    std::cout << "touch_down " << id << " " << x << " " << y << "\n";
++}
++
++void wlr_seat_touch_notify_up( wlr_seat *, uint32_t, uint32_t id )
++{
++    std::cout << "touch_up " << id << "\n";
++}
++
++void wlr_seat_touch_notify_frame( wlr_seat * )
++{
++    std::cout << "touch_frame\n";
++}
++
++void wl_display_flush_clients( wl_display * )
++{
++    std::cout << "flush\n";
++}
++
++void wlr_seat_pointer_notify_button( wlr_seat *, uint32_t, int button, int state )
++{
++    std::cout << "button " << button << " " << state << "\n";
++}
++
++void wlr_seat_pointer_notify_frame( wlr_seat * ) {}
++
++static inline uint32_t TouchClickModeToLinuxButton( gamescope::TouchClickMode mode )
++{
++    switch ( mode )
++    {
++        case gamescope::Left:
++        case gamescope::Trackpad:
++            return 0x110;
++        case gamescope::Right:
++            return 0x111;
++        case gamescope::Middle:
++            return 0x112;
++        default:
++            return 0;
++    }
++}
++
++class Backend
++{
++public:
++    gamescope::TouchClickMode GetTouchClickMode() const { return m_mode; }
++    gamescope::TouchClickMode m_mode = gamescope::Passthrough;
++};
++static Backend g_backend;
++static Backend *GetBackend() { return &g_backend; }
++
++static int g_nOutputWidth = 1920;
++static int g_nOutputHeight = 1080;
++static double focusedWindowOffsetX = 0.0;
++static double focusedWindowOffsetY = 0.0;
++static double focusedWindowScaleX = 1.0;
++static double focusedWindowScaleY = 1.0;
++static std::atomic<bool> g_bPendingTouchMovement{ false };
++static bool pending_gesture_x = false;
++static bool pending_gesture_y = false;
++
++bool cv_touch_gestures = true;
++bool cv_touch_gestures_in_game = true;
++"""
++
++MAIN = r"""
++static gamescope::TouchClickMode parse_mode( const std::string &name )
++{
++    if ( name == "passthrough" ) return gamescope::Passthrough;
++    if ( name == "disabled" ) return gamescope::Disabled;
++    if ( name == "left" ) return gamescope::Left;
++    if ( name == "right" ) return gamescope::Right;
++    if ( name == "middle" ) return gamescope::Middle;
++    if ( name == "hover" ) return gamescope::Hover;
++    if ( name == "trackpad" ) return gamescope::Trackpad;
++    std::abort();
++}
++
++int main( int argc, char **argv )
++{
++    wlserver.mouse_focus_surface = &g_focus_surface;
++    wlserver.wlr.seat = nullptr;
++    wlserver.display = &g_display;
++    wlserver.event_loop = &g_event_loop;
++    uint32_t time = 1;
++
++    for ( int i = 1; i < argc; i++ )
++    {
++        std::string op = argv[i];
++        if ( op == "mode" )
++            g_backend.m_mode = parse_mode( argv[++i] );
++        else if ( op == "master" )
++            cv_touch_gestures = std::string( argv[++i] ) == "1";
++        else if ( op == "child" )
++            cv_touch_gestures_in_game = std::string( argv[++i] ) == "1";
++        else if ( op == "focus" )
++        {
++            wlserver.mouse_focus_is_steam = std::string( argv[++i] ) == "steam";
++            wlserver.mouse_focus_surface = &g_focus_surface;
++        }
++        else if ( op == "focus-other" )
++            wlserver.mouse_focus_surface = &g_other_surface;
++        else if ( op == "scale" )
++        {
++            focusedWindowScaleX = std::atof( argv[++i] );
++            focusedWindowScaleY = std::atof( argv[++i] );
++        }
++        else if ( op == "down" )
++        {
++            double x = std::atof( argv[++i] );
++            double y = std::atof( argv[++i] );
++            int id = std::atoi( argv[++i] );
++            wlserver_touchdown( x, y, id, time++, nullptr );
++        }
++        else if ( op == "motion" )
++        {
++            double x = std::atof( argv[++i] );
++            double y = std::atof( argv[++i] );
++            int id = std::atoi( argv[++i] );
++            wlserver_touchmotion( x, y, id, time++, false, nullptr );
++        }
++        else if ( op == "up" )
++        {
++            int id = std::atoi( argv[++i] );
++            wlserver_touchup( id, time++ );
++        }
++        else if ( op == "tick" )
++            tick( std::atol( argv[++i] ) );
++        else if ( op == "mark" )
++            std::cout << "mark " << argv[++i] << "\n";
++    }
++    return 0;
++}
++"""
++
++
++def extracted_region(source):
++    start = source.find("void wlserver_gesture_flush()")
++    end = source.find("gamescope_xwayland_server_t *wlserver_get_xwayland_server", start)
++    if start < 0 or end < 0:
++        raise AssertionError("could not locate the touch gesture bodies in wlserver.cpp")
++    region = source[start:end]
++    # The fixture owns the boolean globals; drop any convar declarations of them.
++    region = re.sub(
++        r"(?m)^[^\n]*\bConVar<[^>]+>\s+cv_touch_gestures(?:_in_game)?\s*\([^;]*\);\s*$",
++        "",
++        region,
++    )
++    return region
++
++
++class InGameSwipesNativeTest(unittest.TestCase):
++    @classmethod
++    def setUpClass(cls):
++        cls.directory = tempfile.TemporaryDirectory()
++        cls.addClassCleanup(cls.directory.cleanup)
++        compiler = shutil.which("c++") or shutil.which("g++")
++        if compiler is None:
++            raise AssertionError("no C++ compiler available for the fixture")
++        source = Path(cls.directory.name) / "fixture.cpp"
++        source.write_text(
++            PRELUDE + "\n" + extracted_region(WLSOURCE.read_text()) + "\n" + MAIN,
++            encoding="utf-8",
++        )
++        cls.executable = Path(cls.directory.name) / "fixture"
++        result = subprocess.run(
++            [compiler, "-std=c++17", "-O0", "-o", str(cls.executable), str(source)],
++            text=True, capture_output=True,
++        )
++        if result.returncode != 0:
++            raise AssertionError("fixture compile failed:\n" + result.stderr)
++
++    def run_fixture(self, *operations):
++        result = subprocess.run(
++            [str(self.executable), *operations],
++            text=True, capture_output=True, timeout=10,
++        )
++        self.assertEqual(result.returncode, 0, result.stderr)
++        return [line for line in result.stdout.splitlines() if line]
++
++    def menus(self, output):
++        return [line for line in output if line.startswith("menu ")]
++
++    def assert_mode_effect(self, mode, output):
++        if mode in ("left", "right", "middle"):
++            self.assertTrue(
++                any(line.startswith("button ") for line in output),
++                f"{mode} lost its click button: {output}",
++            )
++            self.assertTrue(
++                any(line.startswith("warp ") for line in output),
++                f"{mode} lost its pointer warp: {output}",
++            )
++        elif mode == "hover":
++            self.assertTrue(any(line.startswith("warp ") for line in output), output)
++        elif mode == "trackpad":
++            self.assertTrue(any(line.startswith("motion ") for line in output), output)
++        elif mode == "passthrough":
++            self.assertTrue(any(line.startswith("touch ") for line in output), output)
++
++    def edge_ops(self, mode, start_x, move_x, start_y=0.5, move_y=0.5, master=1, child=None,
++                 repeat_motion=False):
++        operations = ["mode", mode, "master", str(master)]
++        if child is not None:
++            operations.extend(["child", str(child)])
++        operations.extend([
++            "down", str(start_x), str(start_y), "1",
++            "motion", str(move_x), str(move_y), "1",
++        ])
++        if repeat_motion:
++            # Repeated motion must land before the finger lifts.
++            operations.extend(["motion", str(move_x), str(move_y), "1"])
++        # Every swipe now finishes with the lift and the post-lift grace.
++        operations.extend(["up", "1", "tick", "100"])
++        return operations
++
++    def test_passthrough_edge_swipes_open_once(self):
++        for start_x, move_x, menu in ((0.02, 0.20, "main"), (0.98, 0.80, "qam")):
++            output = self.run_fixture(
++                *self.edge_ops("passthrough", start_x, move_x, repeat_motion=True)
++            )
++            self.assertEqual(self.menus(output), [f"menu {menu}"], output)
++
++    def test_passthrough_non_swipes_are_rejected(self):
++        cases = (
++            (0.50, 0.75, 0.50, 0.50),  # starts in the centre
++            (0.02, 0.00, 0.50, 0.50),  # moves away from the edge
++            (0.02, 0.20, 0.10, 0.90),  # mostly vertical
++        )
++        for start_x, move_x, start_y, move_y in cases:
++            output = self.run_fixture(
++                *self.edge_ops("passthrough", start_x, move_x, start_y, move_y)
++            )
++            self.assertEqual(self.menus(output), [], (start_x, move_x, start_y, move_y, output))
++
++    def test_default_on_allows_swipe_in_every_click_mode(self):
++        for child in (None, "1"):
++            for mode in ("passthrough", "left", "right", "middle", "hover", "trackpad"):
++                output = self.run_fixture(
++                    *self.edge_ops(mode, 0.02, 0.20, child=child)
++                )
++                self.assertEqual(self.menus(output), ["menu main"], (child, mode, output))
++                self.assert_mode_effect(mode, output)
++
++    def test_child_off_keeps_click_modes_without_menu(self):
++        for mode in ("passthrough", "left", "right", "middle", "hover", "trackpad"):
++            output = self.run_fixture(
++                *self.edge_ops(mode, 0.02, 0.20, child=0)
++            )
++            self.assertEqual(self.menus(output), [], (mode, output))
++            self.assert_mode_effect(mode, output)
++
++    def test_master_off_wins_in_every_mode(self):
++        for mode in ("passthrough", "left", "right", "middle", "hover", "trackpad"):
++            output = self.run_fixture(
++                *self.edge_ops(mode, 0.02, 0.20, master=0, child=1)
++            )
++            self.assertEqual(self.menus(output), [], (mode, output))
++            self.assert_mode_effect(mode, output)
++
++    def test_disabled_never_emits(self):
++        for master, child in (("1", "1"), ("1", "0"), ("0", "1")):
++            output = self.run_fixture(
++                *self.edge_ops("disabled", 0.02, 0.20, master=master, child=child)
++            )
++            self.assertEqual(output, [], (master, child))
++
++    def test_master_off_between_down_and_motion_does_not_emit(self):
++        output = self.run_fixture(
++            "mode", "passthrough", "master", "1", "child", "1",
++            "down", "0.02", "0.5", "1",
++            "master", "0",
++            "motion", "0.20", "0.5", "1",
++        )
++        self.assertEqual(self.menus(output), [], output)
++
++    def test_child_off_between_down_and_motion_does_not_emit(self):
++        output = self.run_fixture(
++            "mode", "passthrough", "master", "1", "child", "1",
++            "down", "0.02", "0.5", "1",
++            "child", "0",
++            "motion", "0.20", "0.5", "1",
++        )
++        self.assertEqual(self.menus(output), [], output)
++
++    def test_steam_ui_still_recognizes_edge_swipes_with_child_off(self):
++        for start_x, move_x, menu in ((0.02, 0.20, "main"), (0.98, 0.80, "qam")):
++            output = self.run_fixture(
++                "mode", "passthrough", "master", "1", "child", "0", "focus", "steam",
++                "down", str(start_x), "0.5", "1",
++                "motion", str(move_x), "0.5", "1",
++                "up", "1", "tick", "100",
++            )
++            self.assertEqual(self.menus(output), [f"menu {menu}"], output)
++
++    def test_master_off_suppresses_steam_ui_swipes(self):
++        for mode in ("passthrough", "left"):
++            output = self.run_fixture(
++                "mode", mode, "master", "0", "child", "1", "focus", "steam",
++                "down", "0.02", "0.5", "1",
++                "motion", "0.20", "0.5", "1",
++            )
++            self.assertEqual(self.menus(output), [], (mode, output))
++
++    def test_scaled_game_uses_output_space_for_both_edges(self):
++        # The fixture output is 1920x1080. A game half the panel resolution makes
++        # wlserver scale pointer coordinates down by 0.5, but the screen-edge
++        # zones and the travel distance are still fractions of the panel.
++        for start_x, move_x, menu in ((0.02, 0.12, "main"), (0.98, 0.88, "qam")):
++            with self.subTest(start_x=start_x, move_x=move_x, menu=menu):
++                output = self.run_fixture(
++                    "mode", "left", "focus", "game", "master", "1", "child", "1",
++                    "scale", "0.5", "0.5",
++                    "down", str(start_x), "0.5", "1",
++                    "motion", str(move_x), "0.5", "1",
++                    "up", "1", "tick", "100",
++                )
++
++                self.assertEqual(self.menus(output), [f"menu {menu}"], output)
++
++                warps = []
++                for line in output:
++                    if line.startswith("warp "):
++                        _, warp_x, warp_y = line.split()
++                        warps.append((float(warp_x), float(warp_y)))
++                scaled = (
++                    (start_x * 1920 * 0.5, 1080 * 0.5 * 0.5),
++                    (move_x * 1920 * 0.5, 1080 * 0.5 * 0.5),
++                )
++                self.assertEqual(len(warps), 2, output)
++                for actual, expected in zip(warps, scaled):
++                    self.assertAlmostEqual(actual[0], expected[0], places=3, msg=output)
++                    self.assertAlmostEqual(actual[1], expected[1], places=3, msg=output)
++
++    def handoff_ops(self, *extra, start_x="0.02", move_x="0.20"):
++        # A game-surface edge swipe recognised on the first motion; everything
++        # the caller appends happens while the finger is still down.
++        return [
++            "mode", "passthrough", "master", "1", "child", "1", "focus", "game",
++            "down", start_x, "0.5", "1",
++            "motion", move_x, "0.5", "1",
++            *extra,
++        ]
++
++    def test_no_menu_before_up_and_grace(self):
++        for start_x, move_x, menu in (("0.02", "0.20", "main"), ("0.98", "0.80", "qam")):
++            ops = self.handoff_ops(start_x=start_x, move_x=move_x)
++            self.assertEqual(self.menus(self.run_fixture(*ops)), [])
++            self.assertEqual(
++                self.menus(self.run_fixture(*ops, "tick", "200")), []
++            )
++            # The boundary must be crossed in one process: 99ms then the last 1ms.
++            output = self.run_fixture(*ops, "up", "1", "tick", "99", "tick", "1")
++            self.assertEqual(self.menus(output), [f"menu {menu}"], output)
++
++    def test_touch_up_and_frame_precede_menu(self):
++        output = self.run_fixture(
++            *self.handoff_ops(
++                "mark", "before-up",
++                "up", "1",
++                "mark", "after-up",
++                "tick", "100",
++            )
++        )
++        self.assertEqual(self.menus(output), ["menu main"], output)
++        menu_at = output.index("menu main")
++        for marker in ("mark before-up", "touch_up 1", "touch_frame", "flush"):
++            self.assertIn(marker, output, output)
++            self.assertLess(output.index(marker), menu_at, output)
++
++    def test_second_finger_delays_menu_until_last_up(self):
++        base = [
++            "mode", "passthrough", "master", "1", "child", "1", "focus", "game",
++            "down", "0.02", "0.5", "1",
++            "down", "0.50", "0.5", "2",
++            "motion", "0.20", "0.5", "1",
++        ]
++        output = self.run_fixture(*base, "up", "1", "tick", "100")
++        self.assertEqual(self.menus(output), [], output)
++        output = self.run_fixture(*base, "up", "1", "up", "2", "tick", "99")
++        self.assertEqual(self.menus(output), [], output)
++        output = self.run_fixture(*base, "up", "1", "up", "2", "tick", "100")
++        self.assertEqual(self.menus(output), ["menu main"], output)
++
++    def test_new_contact_during_grace_restarts_it(self):
++        base = [
++            "mode", "passthrough", "master", "1", "child", "1", "focus", "game",
++            "down", "0.02", "0.5", "1",
++            "motion", "0.20", "0.5", "1",
++            "up", "1",
++        ]
++        output = self.run_fixture(
++            *base, "tick", "50", "down", "0.50", "0.5", "2", "tick", "60",
++        )
++        self.assertEqual(self.menus(output), [], output)
++        output = self.run_fixture(
++            *base, "tick", "50", "down", "0.50", "0.5", "2", "up", "2", "tick", "99",
++        )
++        self.assertEqual(self.menus(output), [], output)
++        output = self.run_fixture(
++            *base, "tick", "50", "down", "0.50", "0.5", "2", "up", "2", "tick", "100",
++        )
++        self.assertEqual(self.menus(output), ["menu main"], output)
++
++    def test_gate_off_after_gesture_cancels_pending_menu(self):
++        for operation, value in (("master", "0"), ("child", "0")):
++            output = self.run_fixture(
++                "mode", "passthrough", "master", "1", "child", "1", "focus", "game",
++                "down", "0.02", "0.5", "1",
++                "motion", "0.20", "0.5", "1",
++                operation, value,
++                "up", "1", "tick", "100",
++            )
++            self.assertEqual(self.menus(output), [], (operation, output))
++
++    def test_focus_change_during_grace_cancels_menu(self):
++        output = self.run_fixture(
++            *self.handoff_ops(
++                "up", "1", "tick", "50", "focus-other", "tick", "100"
++            )
++        )
++        self.assertEqual(self.menus(output), [], output)
++
++    def test_central_click_after_menu_stays_native(self):
++        output = self.run_fixture(
++            *self.handoff_ops(
++                "up", "1", "tick", "100",
++                "focus", "game",
++                "down", "0.50", "0.5", "2",
++                "motion", "0.55", "0.5", "2",
++                "up", "2",
++            )
++        )
++        self.assertEqual(self.menus(output), ["menu main"], output)
++        after_menu = output[output.index("menu main") + 1:]
++        self.assertTrue(any(line.startswith("touch_down 2 ") for line in after_menu), output)
++        self.assertTrue(any(line.startswith("touch 2 ") for line in after_menu), output)
++        self.assertIn("touch_up 2", after_menu, output)
++        pointer = [line for line in after_menu if line.startswith(("warp ", "button ", "motion "))]
++        self.assertEqual(pointer, [], output)
++
++    def test_first_edge_wins_when_both_swipes_race(self):
++        output = self.run_fixture(
++            "mode", "passthrough", "master", "1", "child", "1", "focus", "game",
++            "down", "0.02", "0.5", "1",
++            "down", "0.98", "0.5", "2",
++            "motion", "0.20", "0.5", "1",
++            "motion", "0.80", "0.5", "2",
++            "up", "2",
++            "up", "1",
++            "tick", "100",
++        )
++        self.assertEqual(self.menus(output), ["menu main"], output)
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/tests/test_steam_menu_dispatch.py b/tests/test_steam_menu_dispatch.py
+new file mode 100644
+index 0000000..4ab9823
+--- /dev/null
++++ b/tests/test_steam_menu_dispatch.py
+@@ -0,0 +1,260 @@
++"""End-to-end X11 delivery test for wlserver_open_steam_menu.
++
++Existing tests stub wlserver_open_steam_menu, so they never see whether the
++fake key events actually reach an X client. This test extracts the real
++function body from src/wlserver.cpp, compiles it against libX11/libXtst, and
++watches a separate receiver connection on a disposable Xvfb server.
++
++Because XTest input is routed through libei on the target tablet and lands in
++the focused game instead of the shell, the receiver asserts direct addressing:
++every event must arrive with window == the receiver window, send_event == true
++(i.e. an explicit XSendEvent, not an injected device event), the expected keysym
++sequence with states [0, ControlMask, ControlMask, ControlMask], and the server
++focus (window plus revert mode) must be unchanged afterwards. An XTest-based
++implementation can deliver the same four keys and still fail here.
++
++Run inside a container that provides Xvfb, g++ and the X11/XTest headers:
++
++    python3 -m unittest tests.test_steam_menu_dispatch -v
++"""
++
++import os
++import re
++import subprocess
++import tempfile
++import time
++import unittest
++from pathlib import Path
++
++SRC = Path(__file__).resolve().parents[1] / "src" / "wlserver.cpp"
++DISPLAY_NUM = 91
++DISPLAY = f":{DISPLAY_NUM}"
++
++RUNNER_HEAD = r"""
++#include <X11/Xlib.h>
++#include <X11/keysym.h>
++#include <X11/extensions/XTest.h>
++#include <stdint.h>
++#include <stdio.h>
++#include <unistd.h>
++#include <chrono>
++#include <thread>
++#include <vector>
++
++struct gamescope_xwayland_server_t {
++	Display *dpy = nullptr;
++	Display *get_xdisplay() { return dpy; }
++};
++
++static gamescope_xwayland_server_t g_Server;
++gamescope_xwayland_server_t *wlserver_get_xwayland_server( int index )
++{
++	return index == 0 ? &g_Server : nullptr;
++}
++
++/* ---- extracted production code ---- */
++"""
++
++RUNNER_MAIN = r"""
++/* ---- end extracted production code ---- */
++
++int main( int argc, char **argv )
++{
++	if ( argc < 2 )
++	{
++		fprintf( stderr, "usage: %s <0|1>\n", argv[0] );
++		return 2;
++	}
++	const bool bQAM = argv[1][0] == '1';
++
++	Display *pReceiver = XOpenDisplay( nullptr );
++	Display *pSender = XOpenDisplay( nullptr );
++	if ( !pReceiver || !pSender )
++	{
++		fprintf( stderr, "failed to open display\n" );
++		return 3;
++	}
++	g_Server.dpy = pSender;
++
++	Window hWindow = XCreateSimpleWindow( pReceiver, DefaultRootWindow( pReceiver ), 0, 0, 32, 32, 0, 0, 0 );
++	XSelectInput( pReceiver, hWindow, KeyPressMask | KeyReleaseMask );
++	XMapWindow( pReceiver, hWindow );
++	XSync( pReceiver, False );
++	XSetInputFocus( pReceiver, hWindow, RevertToParent, CurrentTime );
++	XSync( pReceiver, False );
++
++	const KeyCode uCtrl = XKeysymToKeycode( pReceiver, XK_Control_L );
++	const KeyCode uDigit = XKeysymToKeycode( pReceiver, bQAM ? XK_2 : XK_1 );
++
++	XEvent ev;
++	while ( XPending( pReceiver ) )
++		XNextEvent( pReceiver, &ev );
++
++	/* Direct-address delivery must leave server focus alone, so record both the
++	 * reported focus window and the revert mode before the production call. */
++	Window hFocusBefore = None;
++	int nRevertBefore = 0;
++	XGetInputFocus( pReceiver, &hFocusBefore, &nRevertBefore );
++	XSync( pReceiver, False );
++
++	/* Real production call. No flush/sync of the sender afterwards: delivery
++	 * may only happen through whatever the production code itself sends. */
++	wlserver_open_steam_menu( bQAM );
++
++	std::vector<XKeyEvent> vReceived;
++	auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds( 300 );
++	while ( std::chrono::steady_clock::now() < deadline )
++	{
++		while ( XPending( pReceiver ) )
++		{
++			XEvent evRecv;
++			XNextEvent( pReceiver, &evRecv );
++			if ( evRecv.type == KeyPress || evRecv.type == KeyRelease )
++				vReceived.push_back( evRecv.xkey );
++		}
++		if ( vReceived.size() >= 4 )
++			break;
++		std::this_thread::sleep_for( std::chrono::milliseconds( 1 ) );
++	}
++
++	Window hFocusAfter = None;
++	int nRevertAfter = 0;
++	XGetInputFocus( pReceiver, &hFocusAfter, &nRevertAfter );
++
++	const std::vector<std::pair<KeyCode, bool>> vExpected = {
++		{ uCtrl, true },
++		{ uDigit, true },
++		{ uDigit, false },
++		{ uCtrl, false },
++	};
++	const std::vector<int> vExpectedState = { 0, ControlMask, ControlMask, ControlMask };
++
++	printf( "mode=%s received=%zu expected=%zu\n", bQAM ? "qam" : "main", vReceived.size(), vExpected.size() );
++	for ( size_t i = 0; i < vReceived.size(); i++ )
++		printf( "  got[%zu] keycode=%u %s window=0x%lx send_event=%d state=0x%x\n", i,
++			vReceived[i].keycode, vReceived[i].type == KeyPress ? "press" : "release",
++			vReceived[i].window, vReceived[i].send_event ? 1 : 0, vReceived[i].state );
++
++	bool bOk = true;
++	if ( vReceived.size() != vExpected.size() )
++	{
++		printf( "  mismatch: received %zu events, expected %zu\n", vReceived.size(), vExpected.size() );
++		bOk = false;
++	}
++
++	for ( size_t i = 0; i < vReceived.size() && i < vExpected.size(); i++ )
++	{
++		const bool bPress = vReceived[i].type == KeyPress;
++		if ( vReceived[i].keycode != vExpected[i].first || bPress != vExpected[i].second )
++		{
++			printf( "  mismatch at %zu: keycode=%u %s, expected keycode=%u %s\n", i,
++				vReceived[i].keycode, bPress ? "press" : "release",
++				vExpected[i].first, vExpected[i].second ? "press" : "release" );
++			bOk = false;
++		}
++		if ( vReceived[i].window != hWindow )
++		{
++			printf( "  mismatch at %zu: window=0x%lx, expected 0x%lx (event not addressed to receiver)\n",
++				i, vReceived[i].window, hWindow );
++			bOk = false;
++		}
++		if ( !vReceived[i].send_event )
++		{
++			printf( "  mismatch at %zu: send_event=false (not a synthetic XSendEvent delivery)\n", i );
++			bOk = false;
++		}
++		if ( vReceived[i].state != vExpectedState[i] )
++		{
++			printf( "  mismatch at %zu: state=0x%x, expected 0x%x\n", i,
++				vReceived[i].state, vExpectedState[i] );
++			bOk = false;
++		}
++	}
++
++	if ( hFocusAfter != hFocusBefore || nRevertAfter != nRevertBefore )
++	{
++		printf( "  mismatch: focus changed from 0x%lx (revert %d) to 0x%lx (revert %d)\n",
++			hFocusBefore, nRevertBefore, hFocusAfter, nRevertAfter );
++		bOk = false;
++	}
++
++	XCloseDisplay( pSender );
++	XCloseDisplay( pReceiver );
++	return bOk ? 0 : 1;
++}
++"""
++
++
++def extract_function(text):
++    match = re.search(r"void[ \t]+wlserver_open_steam_menu[ \t]*\([ \t]*bool[ \t]+\w+[ \t]*\)", text)
++    if not match:
++        raise AssertionError("wlserver_open_steam_menu not found in wlserver.cpp")
++    start = text.index("{", match.end())
++    depth = 0
++    for pos in range(start, len(text)):
++        if text[pos] == "{":
++            depth += 1
++        elif text[pos] == "}":
++            depth -= 1
++            if depth == 0:
++                return text[match.start():pos + 1]
++    raise AssertionError("unbalanced braces while extracting wlserver_open_steam_menu")
++
++
++class SteamMenuDispatchTest(unittest.TestCase):
++    @classmethod
++    def setUpClass(cls):
++        cls.tmpdir = tempfile.TemporaryDirectory()
++        work = Path(cls.tmpdir.name)
++
++        source = SRC.read_text(encoding="utf-8")
++        (work / "runner.cpp").write_text(RUNNER_HEAD + extract_function(source) + RUNNER_MAIN, encoding="utf-8")
++        cls.binary = work / "runner"
++
++        build = subprocess.run(
++            ["g++", "-std=c++17", "-O0", "-o", str(cls.binary), str(work / "runner.cpp"), "-lX11", "-lXtst"],
++            capture_output=True, text=True)
++        if build.returncode != 0:
++            raise AssertionError(f"runner build failed:\n{build.stdout}\n{build.stderr}")
++
++        cls.xvfb = subprocess.Popen(
++            ["Xvfb", DISPLAY, "-screen", "0", "640x480x24", "-nolisten", "tcp"],
++            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
++        socket = Path(f"/tmp/.X11-unix/X{DISPLAY_NUM}")
++        deadline = time.monotonic() + 5.0
++        while time.monotonic() < deadline:
++            if socket.exists():
++                break
++            if cls.xvfb.poll() is not None:
++                raise AssertionError("Xvfb exited during startup")
++            time.sleep(0.05)
++        else:
++            raise AssertionError(f"Xvfb socket {socket} did not appear within 5s")
++
++        cls.env = dict(os.environ, DISPLAY=DISPLAY)
++
++    @classmethod
++    def tearDownClass(cls):
++        cls.xvfb.terminate()
++        try:
++            cls.xvfb.wait(timeout=5)
++        except subprocess.TimeoutExpired:
++            cls.xvfb.kill()
++            cls.xvfb.wait()
++        cls.tmpdir.cleanup()
++
++    def _run(self, qam):
++        result = subprocess.run([str(self.binary), "1" if qam else "0"],
++                                capture_output=True, text=True, env=self.env, timeout=30)
++        self.assertEqual(result.returncode, 0,
++                         f"dispatch failed for {'qam' if qam else 'main'}:\n{result.stdout}{result.stderr}")
++
++    def test_main_menu_sequence(self):
++        self._run(False)
++
++    def test_qam_menu_sequence(self):
++        self._run(True)
++
++
++if __name__ == "__main__":
++    unittest.main()

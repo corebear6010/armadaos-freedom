@@ -37,6 +37,12 @@
 # although ucsi has the role at device and a PC is on the port; a none ->
 # device toggle brings it up. The state is logged first so the cause can be
 # traced.
+# This helper is also shipped in the common image. Only Baldur owns this
+# controller/mux wiring; other boards must not touch its GPIO or USB role.
+compatible=/sys/firmware/devicetree/base/compatible
+[ -r "$compatible" ] || exit 0
+tr '\000' '\n' < "$compatible" | grep -Fqx 'lenovo,baldur' || exit 0
+
 role=/sys/class/usb_role/a600000.usb-role-switch/role
 udc=/sys/class/udc/a600000.usb/state
 func=/sys/class/udc/a600000.usb/function

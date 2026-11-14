@@ -169,6 +169,8 @@ class SyncTest(unittest.TestCase):
         self.runtime = self.tree.root / "runtime.img"
         self.runtime.write_bytes(b"RUNTIME-IMAGE")
         self.runtime_sha = sha(self.runtime.read_bytes())
+        self.avb_key = self.tree.root / "testkey_rsa4096.pem"
+        self.avb_key.write_bytes(b"PRIVATE-KEY")
         self.tools = self.tree.root / "tools"
         self.tools.mkdir()
         for name in sync.TOOL_FILES.values():
@@ -307,6 +309,7 @@ class SyncTest(unittest.TestCase):
             "--stock-sha256": self.stock_sha,
             "--runtime": str(self.runtime),
             "--runtime-sha256": self.runtime_sha,
+            "--avb-key": str(self.avb_key),
             "--partuuid": PARTUUID,
             "--expected-current-sha256": sha(old_bytes()),
             "--work": str(self.work),

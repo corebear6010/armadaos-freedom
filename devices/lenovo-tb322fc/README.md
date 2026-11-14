@@ -36,6 +36,8 @@ ArmadaOS Freedom 为 Y700 四代提供 kShimC 多系统启动、Steam 游戏模�
 
 ## 已知问题与待完成项
 
+- **蓝牙：** WCN7861 驱动与五份固件已接入正式打包流程；新镜像的冷启动、配对、重连及休眠恢复待真机验证，见[蓝牙固件与构建说明](bluetooth.md)。
+
 - **充电与双 USB：** 充电功率上报、快充兼容性及长边／短边端口行为仍需完善。
 - **安装与更新：** 公共安装流程仍在完善，OTA 源码策略与钩子已接入，完整的引导载荷同步及系统更新尚未通过端到端验证。
 - **启动器：** 手动／自动机型选择与默认启动项仅在本次启动内生效，持久化暂缓。TF 卡启动及高级启动操作不在上述已确认范围内。
@@ -52,7 +54,7 @@ ArmadaOS Freedom 为 Y700 四代提供 kShimC 多系统启动、Steam 游戏模�
 
 引导构建见[四代引导说明](boot/README.md)，其中分别介绍原厂 Android 基座打包和机身 Linux／诊断环境打包。四代使用 `tb322fc_android_defconfig` 启动器配置，不能直接套用五代的 DTB 和离线打包布局。
 
-系统更新目标为 Freedom 的 `ghcr.io/mydanyi/armadaos-freedom`，支持 `stable`、`beta`、`testing` 渠道。四代的引导同步由 [`armada-kshim-sync`](../../system_files/usr/libexec/armada/armada-kshim-sync) 及其配套工具处理；渠道配置与完整 OTA 验证是两项工作，当前验证范围见上方已知问题。
+系统更新目标为 Freedom 的 `ghcr.io/armadaos-freedom/armadaos-freedom`，支持 `stable`、`beta`、`testing` 渠道。四代的引导同步由 [`armada-kshim-sync`](../../system_files/usr/libexec/armada/armada-kshim-sync) 及其配套工具处理；渠道配置与完整 OTA 验证是两项工作，当前验证范围见上方已知问题。
 
 ## 源码与来源
 

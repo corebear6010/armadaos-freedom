@@ -15,6 +15,17 @@ SERIES_FILE="${REPO_ROOT}/patches/series"
 PATCHES_DIR="${REPO_ROOT}/patches"
 DTS_DIR="${REPO_ROOT}/dts"
 KCONFIG_OVERRIDES="${REPO_ROOT}/config/armada-kernel.config.overrides"
+# Opt-in board overlays (overlays/<name>/, see overlays/README.md), applied on
+# top of the shared tree. Empty by default: the default build is unchanged.
+KERNEL_OVERLAYS="${KERNEL_OVERLAYS:-}"
+OVERLAY_DIRS=()
+for overlay in ${KERNEL_OVERLAYS}; do
+    if [ ! -d "${REPO_ROOT}/overlays/${overlay}" ]; then
+        echo "ERROR: unknown kernel overlay: ${overlay}" >&2
+        exit 1
+    fi
+    OVERLAY_DIRS+=("${REPO_ROOT}/overlays/${overlay}")
+done
 
 # ---------- Host arch / cross-compile setup ----------
 HOST_ARCH=$(uname -m)
@@ -70,14 +81,24 @@ else
 fi
 
 SRC_DIR="${WORK_DIR}/linux-${KERNEL_VERSION}"
+# The overlay set a tree was patched for; FAST=1 must not reuse it for another.
+OVERLAY_STAMP="${SRC_DIR}.overlays"
+OVERLAY_NAMES="$(echo ${KERNEL_OVERLAYS})"
 if [ -n "${FAST:-}" ] && [ -d "${SRC_DIR}" ]; then
     echo "==> FAST=1: reusing existing ${SRC_DIR} (skipping extract + patches)"
+    built_overlays="$(cat "${OVERLAY_STAMP}" 2>/dev/null || true)"
+    if [ "${built_overlays}" != "${OVERLAY_NAMES}" ]; then
+        echo "ERROR: ${SRC_DIR} was built with KERNEL_OVERLAYS='${built_overlays}'," \
+             "not '${OVERLAY_NAMES}'; rebuild without FAST=1" >&2
+        exit 1
+    fi
 else
     rm -rf "${SRC_DIR}"
     echo "==> Extracting ${SRC_TARBALL}"
     tar -xf "${SRC_TARBALL}"
     # github archives name the top dir after the tag, not linux-<version>
     [ -d "${SRC_DIR}" ] || mv "${WORK_DIR}/$(tar -tf "${SRC_TARBALL}" | head -1 | cut -d/ -f1)" "${SRC_DIR}"
+    echo "${OVERLAY_NAMES}" > "${OVERLAY_STAMP}"
 fi
 cd "${SRC_DIR}"
 PREFIX_MAP_FLAGS="-ffile-prefix-map=${SRC_DIR}=linux-${KERNEL_VERSION} -fdebug-prefix-map=${SRC_DIR}=linux-${KERNEL_VERSION} -fmacro-prefix-map=${SRC_DIR}=linux-${KERNEL_VERSION} -ffile-prefix-map=${WORK_DIR}=armada-kernel-build -fdebug-prefix-map=${WORK_DIR}=armada-kernel-build -fmacro-prefix-map=${WORK_DIR}=armada-kernel-build"
@@ -86,6 +107,43 @@ export HOSTCFLAGS="${HOSTCFLAGS:-} ${PREFIX_MAP_FLAGS}"
 export KAFLAGS="${KAFLAGS:-} ${PREFIX_MAP_FLAGS}"
 
 # ---------- 2. Apply patches ----------
+# Apply one patch strictly; updates APPLIED/FAILED. $1 = file, $2 = label.
+apply_patch_file() {
+    local PATCH="$1" line="$2"
+
+    # GNU patch can return success after consuming only the first hunk of a
+    # malformed patch and labelling the rest "trailing garbage". Preflight
+    # verbosely and require every hunk header in the payload to be applied.
+    patch_log=$(mktemp)
+    expected_hunks=$(grep -c '^@@ ' "${PATCH}" || true)
+    if ! patch -p1 --batch --forward -F0 --dry-run --verbose \
+            < "${PATCH}" > "${patch_log}" 2>&1; then
+        cat "${patch_log}"
+        rm -f "${patch_log}"
+        FAILED=$((FAILED+1))
+        echo "  ✗ ${line}  (preflight failed in ${SRC_DIR})"
+        return
+    fi
+    applied_hunks=$(grep -c '^Hunk #[0-9].*succeeded' "${patch_log}" || true)
+    if [ "${applied_hunks}" -ne "${expected_hunks}" ]; then
+        cat "${patch_log}"
+        rm -f "${patch_log}"
+        FAILED=$((FAILED+1))
+        echo "  ✗ ${line}  (${applied_hunks}/${expected_hunks} hunks parsed)"
+        return
+    fi
+    rm -f "${patch_log}"
+
+    if patch -p1 --batch --forward -F0 --no-backup-if-mismatch --quiet \
+            < "${PATCH}"; then
+        APPLIED=$((APPLIED+1))
+        echo "  ✓ ${line}"
+    else
+        FAILED=$((FAILED+1))
+        echo "  ✗ ${line}  (rejects in ${SRC_DIR})"
+    fi
+}
+
 # Precount for the .armada-source metadata; FAST=1 skips the apply loop below.
 APPLIED=$(sed 's/#.*//' "${SERIES_FILE}" | awk 'NF { count++ } END { print count+0 }')
 if [ -z "${FAST:-}" ]; then
@@ -102,39 +160,16 @@ if [ -z "${FAST:-}" ]; then
             echo "  WARN: ${line} not in patches/ (skipping)"
             continue
         fi
-
-        # GNU patch can return success after consuming only the first hunk of a
-        # malformed patch and labelling the rest "trailing garbage". Preflight
-        # verbosely and require every hunk header in the payload to be applied.
-        patch_log=$(mktemp)
-        expected_hunks=$(grep -c '^@@ ' "${PATCH}" || true)
-        if ! patch -p1 --batch --forward -F0 --dry-run --verbose \
-                < "${PATCH}" > "${patch_log}" 2>&1; then
-            cat "${patch_log}"
-            rm -f "${patch_log}"
-            FAILED=$((FAILED+1))
-            echo "  ✗ ${line}  (preflight failed in ${SRC_DIR})"
-            continue
-        fi
-        applied_hunks=$(grep -c '^Hunk #[0-9].*succeeded' "${patch_log}" || true)
-        if [ "${applied_hunks}" -ne "${expected_hunks}" ]; then
-            cat "${patch_log}"
-            rm -f "${patch_log}"
-            FAILED=$((FAILED+1))
-            echo "  ✗ ${line}  (${applied_hunks}/${expected_hunks} hunks parsed)"
-            continue
-        fi
-        rm -f "${patch_log}"
-
-        if patch -p1 --batch --forward -F0 --no-backup-if-mismatch --quiet \
-                < "${PATCH}"; then
-            APPLIED=$((APPLIED+1))
-            echo "  ✓ ${line}"
-        else
-            FAILED=$((FAILED+1))
-            echo "  ✗ ${line}  (rejects in ${SRC_DIR})"
-        fi
+        apply_patch_file "${PATCH}" "${line}"
     done < "${SERIES_FILE}"
+    # Overlay patches: every overlays/<name>/patches/*.patch, in name order
+    for ovdir in "${OVERLAY_DIRS[@]}"; do
+        echo "==> Applying overlay $(basename "${ovdir}")"
+        for PATCH in "${ovdir}"/patches/*.patch; do
+            [ -e "${PATCH}" ] || continue
+            apply_patch_file "${PATCH}" "overlays/$(basename "${ovdir}")/patches/$(basename "${PATCH}")"
+        done
+    done
     echo "==> Patches: ${APPLIED} applied, ${FAILED} failed"
     if [ "${FAILED}" -gt 0 ]; then
         echo "ERROR: some patches failed. Look for *.rej files in ${SRC_DIR} and either:"
@@ -187,6 +222,25 @@ for dts in "${DTS_DIR}"/*.dts; do
 done
 echo "  added ${added_dtbs} DTB entries"
 
+# Overlay DTS: board sources and .dtso overlays are copied in; dts/*.mk lines
+# (plain dtb-y entries and composite <name>-dtbs := base.dtb x.dtbo lines,
+# merged by fdtoverlay) are appended to the qcom Makefile once.
+for ovdir in "${OVERLAY_DIRS[@]}"; do
+    [ -d "${ovdir}/dts" ] || continue
+    echo "==> Adding overlay DTS from $(basename "${ovdir}")"
+    for f in "${ovdir}"/dts/*.dts "${ovdir}"/dts/*.dtsi "${ovdir}"/dts/*.dtso; do
+        [ -e "${f}" ] || continue
+        cp -v "${f}" "${DTS_TARGET}/" 2>&1 | sed 's/^/  /'
+    done
+    for mk in "${ovdir}"/dts/*.mk; do
+        [ -e "${mk}" ] || continue
+        while IFS= read -r mkline; do
+            [ -n "${mkline}" ] || continue
+            grep -qxF "${mkline}" "${QCOM_MAKEFILE}" || echo "${mkline}" >> "${QCOM_MAKEFILE}"
+        done < "${mk}"
+    done
+done
+
 # ---------- 4. Generate config ----------
 # defconfig + fragment via merge_config.sh. Explicit =y requests are checked
 # after Kconfig resolution so a dependency cannot silently demote them to =m.
@@ -204,9 +258,19 @@ if [ -f "${KCONFIG_OVERRIDES}" ]; then
     [ "${HOST_ARCH}" = "aarch64" ] || export CROSS_COMPILE="${CROSS_COMPILE:-aarch64-linux-gnu-}"
     frag=$(mktemp); merge_log=$(mktemp)
     # kconfig's conf can't parse trailing inline comments; strip them off assignments
-    sed -E '/^[[:space:]]*CONFIG_[A-Z0-9_]+=/ s/[[:space:]]*#.*$//' "${KCONFIG_OVERRIDES}" > "${frag}"
+    # overlay fragments (overlays/<name>/config/*.config) follow and win
+    overlay_frags=()
+    for ovdir in "${OVERLAY_DIRS[@]}"; do
+        for f in "${ovdir}"/config/*.config; do
+            [ -e "${f}" ] && overlay_frags+=("${f}")
+        done
+    done
+    [ "${#overlay_frags[@]}" -eq 0 ] || echo "==> Overlay config fragments: ${overlay_frags[*]##*/}"
+    cat "${KCONFIG_OVERRIDES}" "${overlay_frags[@]}" \
+        | sed -E '/^[[:space:]]*CONFIG_[A-Z0-9_]+=/ s/[[:space:]]*#.*$//' > "${frag}"
     bash scripts/kconfig/merge_config.sh .config "${frag}" 2>&1 | tee "${merge_log}"
     config_error=0
+    # Later fragments win: check only each symbol's last request.
     while IFS= read -r requested; do
         case "${requested}" in
             CONFIG_*=y)
@@ -218,7 +282,17 @@ if [ -f "${KCONFIG_OVERRIDES}" ]; then
                 fi
                 ;;
         esac
-    done < "${frag}"
+    done < <(awk '
+        /^[[:space:]]*CONFIG_[A-Z0-9_]+=/ {
+            line = $0; sub(/^[[:space:]]*/, "", line)
+            sym = line; sub(/=.*/, "", sym)
+        }
+        /^[[:space:]]*# CONFIG_[A-Z0-9_]+ is not set/ { sym = $2; line = sym "=n" }
+        sym != "" {
+            if (!(sym in last)) order[++n] = sym
+            last[sym] = line; sym = ""
+        }
+        END { for (i = 1; i <= n; i++) print last[order[i]] }' "${frag}")
     if [ "${config_error}" -ne 0 ] || grep -q "not in final .config" "${merge_log}"; then
         rm -f "${frag}" "${merge_log}"
         echo "ERROR: a requested CONFIG didn't survive Kconfig deps (see above); check the depends-on chain."
@@ -227,9 +301,31 @@ if [ -f "${KCONFIG_OVERRIDES}" ]; then
     rm -f "${frag}" "${merge_log}"
 fi
 
+# An overlay may set CONFIG_LOCALVERSION; kernelrelease only sees it once
+# include/config is in sync with the merged .config.
+[ "${#OVERLAY_DIRS[@]}" -eq 0 ] || make "${MAKE_ARGS[@]}" -s syncconfig >/dev/null
 KVER=$(make "${MAKE_ARGS[@]}" -s kernelrelease)
 echo "==> Kernel version: ${KVER}"
 echo "==> Compiler: $(sed -n 's/^CONFIG_CC_VERSION_TEXT="\(.*\)"$/\1/p' .config)"
+
+# Infinity overlay requires its LOCALVERSION in kernelrelease; refuse silently
+# mis-versioned artifacts before they get staged or packaged.
+# Iterate the overlay tokens so whitespace (tabs, multiple spaces) normalizes
+# to a token set and ``infinity`` matches exactly once; ``infinity-extra``
+# does NOT match ``infinity``.
+for ov in ${KERNEL_OVERLAYS:-}; do
+  if [ "${ov}" = "infinity" ]; then
+    case "${KVER}" in
+      *-freedom-infinity) ;;
+      *)
+        echo "ERROR: infinity overlay requested but kernelrelease '${KVER}' does not end with -freedom-infinity;" >&2
+        echo "       check overlays/infinity/config/infinity.config is present and survived merge_config." >&2
+        exit 1
+        ;;
+    esac
+    break
+  fi
+done
 
 # ---------- 5. Build ----------
 echo "==> Building Image + dtbs + modules"
@@ -254,6 +350,19 @@ cp -a "${AW_OOT_SRC}/." "${AW_OOT_BUILD}/"
 echo "==> Building out-of-tree aw882xx module"
 make "${MAKE_ARGS[@]}" M="${AW_OOT_BUILD}" CONFIG_SND_SOC_AW882XX=m modules
 
+# SensorProxy-to-IIO bridge for Steam's adaptive-brightness interface.
+ALS_OOT_SRC="${REPO_ROOT}/out-of-tree/als-bridge"
+ALS_OOT_BUILD="${WORK_DIR}/als-bridge-build"
+if [ ! -d "${ALS_OOT_SRC}" ]; then
+    echo "ERROR: out-of-tree als-bridge source missing: ${ALS_OOT_SRC}" >&2
+    exit 1
+fi
+rm -rf "${ALS_OOT_BUILD}"
+mkdir -p "${ALS_OOT_BUILD}"
+cp -a "${ALS_OOT_SRC}/." "${ALS_OOT_BUILD}/"
+echo "==> Building out-of-tree als-bridge module"
+make "${MAKE_ARGS[@]}" M="${ALS_OOT_BUILD}" modules
+
 command -v ccache >/dev/null 2>&1 && ccache -s || true
 size vmlinux 2>/dev/null || true
 
@@ -277,9 +386,20 @@ if [ -z "${installed_ko}" ]; then
     exit 1
 fi
 
+echo "==> Staging out-of-tree als-bridge module to extra/als-bridge"
+make "${MAKE_ARGS[@]}" M="${ALS_OOT_BUILD}" \
+    INSTALL_MOD_PATH="${STAGE}" INSTALL_MOD_DIR="extra/als-bridge" \
+    INSTALL_MOD_STRIP=1 modules_install
+installed_als=$(find "${STAGE}/lib/modules/${KVER}/extra/als-bridge" -maxdepth 1 \
+    -name 'als-bridge.ko*' -print -quit || true)
+if [ -z "${installed_als}" ]; then
+    echo "ERROR: als-bridge module was not installed into ${STAGE}" >&2
+    exit 1
+fi
+
 rm -f "${STAGE}/lib/modules/${KVER}/build" "${STAGE}/lib/modules/${KVER}/source"
 
-# Regenerate the stage index after the out-of-tree install. A missing depmod
+# Regenerate the stage index after the out-of-tree installs. A missing depmod
 # is a hard failure, not a silent skip.
 if ! command -v depmod >/dev/null 2>&1; then
     echo "ERROR: depmod not found; cannot index ${STAGE}" >&2
@@ -296,6 +416,16 @@ for dts in "${DTS_DIR}"/*.dts; do
         echo "  WARN: built DTB missing: ${dtb_src}"
     fi
 done
+# Overlay DTBs: every "dtb-... += <name>.dtb" target of the overlay .mk files
+for ovdir in "${OVERLAY_DIRS[@]}"; do
+    for dtb in $(cat "${ovdir}"/dts/*.mk 2>/dev/null | sed -n 's/^dtb-.*+=[[:space:]]*\([^[:space:]]*\.dtb\)[[:space:]]*$/\1/p'); do
+        if [ -f "arch/arm64/boot/dts/qcom/${dtb}" ]; then
+            cp "arch/arm64/boot/dts/qcom/${dtb}" "${STAGE}/lib/modules/${KVER}/dtb/qcom/"
+        else
+            echo "  WARN: built overlay DTB missing: ${dtb}"
+        fi
+    done
+done
 
 cat > "${STAGE}/lib/modules/${KVER}/.armada-source" <<EOF
 Source: linux-${KERNEL_VERSION} (kernel.org stable)
@@ -304,6 +434,36 @@ Patches applied: ${APPLIED:-?} (from patches/series)
 DTBs included: $(ls ${DTS_DIR}/*.dts | wc -l) boards (SM8250 + SM8550 + SM8650 + SM8750 + SM8850)
 Repackaged for: armada
 EOF
+[ -z "${KERNEL_OVERLAYS}" ] || echo "Overlays: ${KERNEL_OVERLAYS}" >> "${STAGE}/lib/modules/${KVER}/.armada-source"
+
+# >>> freedom-scheduler-capability >>>
+# Emit a versioned capability marker under lib/modules/${KVER}/freedom-scheduler
+# only when the infinity overlay is active. Ordinary and other-overlay builds
+# must not receive this marker. No binary or fake module is created; the file
+# is a plain text capability contract read by userspace.
+# The overlay list is iterated as words so tabs/multiple spaces normalize to
+# the same token set; only the exact token ``infinity`` triggers staging.
+infinity_active=0
+for ov in ${KERNEL_OVERLAYS:-}; do
+  if [ "${ov}" = "infinity" ]; then
+    infinity_active=1
+    break
+  fi
+done
+if [ "${infinity_active}" -eq 1 ]; then
+  case "${KVER:-}" in
+    *-freedom-infinity) ;;
+    *)
+      echo "ERROR: refusing to stage infinity marker: kernelrelease '${KVER:-}' lacks -freedom-infinity" >&2
+      exit 1
+      ;;
+  esac
+  marker_dir="${STAGE}/lib/modules/${KVER}"
+  mkdir -p "${marker_dir}"
+  printf 'infinity-v1\n' > "${marker_dir}/freedom-scheduler"
+  echo "==> Staged freedom-scheduler capability: infinity-v1"
+fi
+# <<< freedom-scheduler-capability <<<
 
 # ---------- 7. Package ----------
 OUT_NAME="armada-kernel-${KVER}.tar.zst"

@@ -8,8 +8,16 @@ host paths.
 
 - `MultiBootKernelPatcher` — packs a kernel/DTB/shim image from an INI config.
 - `UnpackTool` — unpacks such an image back into its inputs and config.
-- `repack_boot_v4.py` — replaces the kernel in an unsigned Android v4 boot image.
+- `repack_boot_v4.py` — low-level kernel replacement in an Android v4 boot
+  image. It emits an unsigned footer and is not a final output path.
 - `avbtool.py` — Android Verified Boot image/signature helper used by the repack path.
+
+Final boot images must pass through
+`system_files/usr/libexec/armada/kshim-avb-sign.py`, which requires an AVB
+private key, replaces the temporary `NONE` footer with `SHA256_RSA4096`, pins
+the AOSP public-key fingerprint, and verifies the signed payload. The
+TB322FC packaging drivers require `--avb-key`; they fail before producing
+`boot.img` when signing is unavailable.
 
 ## Build contract
 

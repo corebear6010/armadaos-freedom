@@ -2,6 +2,22 @@
 
 # Script copied from https://github.com/OpenGamingCollective/gamescope-session-steam/commit/55e541aa3adb80ee751220c886b9d133504f6e20
 
+# The launcher consumes ORIENTATION, not ARMADA_PANEL_ORIENTATION. Keep explicit
+# overrides; later /etc and per-user session files can still override this
+# default. Gamescope associates and rotates real SPI child inputs itself; the
+# vendor virtual NVT input is handled by 99-armada-tb323fu-virtual-touch.rules,
+# so do not add the old libinput rotation matrix here.
+if [[ -z "${ORIENTATION:-}" ]]; then
+    case "${ARMADA_DEVICE_ID:-}" in
+        lenovo-tb322fc)
+            ORIENTATION="${ARMADA_PANEL_ORIENTATION:-left}"
+            ;;
+        lenovo-tb323fu)
+            ORIENTATION="${ARMADA_PANEL_ORIENTATION:-right}"
+            ;;
+    esac
+fi
+
 source /usr/lib/armada/storage-lib
 
 function short_session_recover {
@@ -44,6 +60,8 @@ fi
 unset _armada_game_tweaks _armada_vulkan_realtime
 
 _armada_swipe_gestures_config="${ARMADA_SWIPE_GESTURES_CONFIG:-/etc/armada/swipe-gestures.conf}"
+# In-game gestures are a child of the master switch and default on.
+export GAMESCOPE_TOUCH_GESTURES_IN_GAME=1
 if [[ -r "$_armada_swipe_gestures_config" ]]; then
     while IFS= read -r _armada_line || [[ -n "$_armada_line" ]]; do
         if [[ "$_armada_line" =~ ^[[:space:]]*enabled[[:space:]]*=[[:space:]]*([01])[[:space:]]*$ ]]; then
@@ -53,6 +71,8 @@ if [[ -r "$_armada_swipe_gestures_config" ]]; then
             else
                 export DISABLE_TOUCH_GESTURES=
             fi
+        elif [[ "$_armada_line" =~ ^[[:space:]]*in_game[[:space:]]*=[[:space:]]*([01])[[:space:]]*$ ]]; then
+            export GAMESCOPE_TOUCH_GESTURES_IN_GAME="${BASH_REMATCH[1]}"
         fi
     done <"$_armada_swipe_gestures_config"
 fi

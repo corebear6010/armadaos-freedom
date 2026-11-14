@@ -7,14 +7,15 @@
 
 /* Boot settings record and the pure decision helpers over it (kShim).
  *
- * The record is plain data: a device choice and a default boot target. It is
+ * The record is plain data: a device choice, a default boot target and the last
+ * selected real system. It is
  * deliberately free of backend, disk-format or LVGL types so it can be stored,
  * compared and tested without any storage or hardware access. The two enums
  * use stable semantic IDs, not menu row indexes and not a serialized C-enum
  * layout, so persisted values keep their meaning when the menu is reordered.
  *
- * boot_settings_init() fills AUTO + MANIFEST. The record is then validated by
- * boot_settings_validate(), which only checks that both fields are inside
+ * boot_settings_init() fills AUTO + MANIFEST with no history. The record is then validated by
+ * boot_settings_validate(), which only checks that all fields are inside
  * their enum ranges and never mutates the record.
  *
  * boot_settings_effective_board() turns the stored choice into the board that
@@ -25,6 +26,7 @@
  *
  * boot_settings_resolve_default() maps the stored default target onto the
  * caller's current array of real boot system targets (ANDROID / INTERNAL / TF).
+ * LAST resolves last_target; with no history it follows MANIFEST.
  * The MANIFEST target means "the caller's initial row", so it returns
  * manifest_initial once that index is proven in range. Any other target must
  * match exactly one candidate; zero or several matches request a new selection
@@ -45,6 +47,7 @@ enum boot_default_target {
     BOOT_TARGET_ANDROID = 1,
     BOOT_TARGET_INTERNAL = 2,
     BOOT_TARGET_TF = 3,
+    BOOT_TARGET_LAST = 4,
 };
 
 enum boot_settings_result {
@@ -56,13 +59,14 @@ enum boot_settings_result {
 struct boot_settings {
     enum boot_device_choice device_choice;
     enum boot_default_target default_target;
+    enum boot_default_target last_target; /* MANIFEST means no history. */
 };
 
 /* Initialize out to the safe default record: AUTO + MANIFEST.
  * Returns BOOT_SETTINGS_OK, or BOOT_SETTINGS_INVALID when out is NULL. */
 int boot_settings_init(struct boot_settings *out);
 
-/* Check that both fields are inside their enum ranges. Does not mutate.
+/* Check that all fields are inside their enum ranges. Does not mutate.
  * Returns BOOT_SETTINGS_OK, or BOOT_SETTINGS_INVALID for a NULL or
  * out-of-range record. */
 int boot_settings_validate(const struct boot_settings *settings);

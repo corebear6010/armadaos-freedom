@@ -1,10 +1,11 @@
 armada_plasma_shell() {
     local state=${1:-${XDG_CONFIG_HOME:-$HOME/.config}/steamos-manager/state.toml}
 
-    if grep -Eqs '^desktop_session[[:space:]]*=[[:space:]]*"armada-plasma-mobile\.desktop"' "${state}"; then
-        echo mobile
-    else
+    if grep -Eqs '^desktop_session[[:space:]]*=[[:space:]]*"armada-plasma\.desktop"' "${state}"; then
         echo desktop
+    else
+        # Missing, unset or raw upstream state follows the Mobile default.
+        echo mobile
     fi
 }
 

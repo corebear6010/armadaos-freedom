@@ -13,8 +13,9 @@ static struct {
     uint32_t dload, version, dload_values[8];
     uint8_t reason, reason_values[8];
     unsigned smc_calls, dload_reads, dload_writes, reason_reads, reason_writes;
-    unsigned cold, warm, oem_warm, prepared;
-    unsigned fail_dload_write, fail_reason_write, corrupt_dload_read;
+    unsigned cold, warm, oem_warm, prepared, sdi_calls;
+    int no_sdi, fail_sdi;
+    unsigned fail_dload_write, fail_reason_write, corrupt_dload_read, fail_dload_read;
     int no_scm, no_reset2, has_oem, fail_prepare, interrupt, resumed, fail_after_write;
 } fake;
 
@@ -150,6 +151,11 @@ int64_t kshim_psci_call(uint32_t fid, uint64_t type, uint64_t cookie, uint64_t u
 {
     assert(fid == 0xc4000012 && type == 0 && cookie == 0 && unused == 0);
     assert(fake.dload == 1);
+#if CONFIG_KSHIM_EDL_DISABLE_SDI
+    assert(fake.sdi_calls == 1);
+#else
+    assert(fake.sdi_calls == 0);
+#endif
     ++fake.warm;
     return -3;
 }
@@ -183,12 +189,26 @@ void kshim_qcom_reboot_smccc(uint64_t r[8])
     uint64_t fid = r[0];
     if (fid == 0xc2000601) {
         assert(r[1] == 1 && (r[2] == 0x02000601 || r[2] == 0x02000501 ||
-                             r[2] == 0x02000502 || r[2] == 0x03000922));
+                             r[2] == 0x02000502 || r[2] == 0x03000922 ||
+                             r[2] == 0x02000109));
         r[0] = 0;
-        r[1] = r[2] == 0x03000922 ? fake.has_oem : !fake.no_scm;
+        r[1] = r[2] == 0x03000922 ? fake.has_oem :
+               r[2] == 0x02000109 ? !fake.no_sdi : !fake.no_scm;
+        return;
+    }
+    if (fid == 0xc2000109) {
+        assert(r[1] == 2 && r[2] == 1 && r[3] == 0);
+        for (unsigned i=4;i<8;++i) assert(r[i] == 0);
+        assert(fake.dload == 1 && fake.dload_reads >= 2);
+        ++fake.sdi_calls; r[0] = fake.fail_sdi ? (uint64_t)-5 : 0;
         return;
     }
     if (fid == 0xc3000922) {
+#if CONFIG_KSHIM_EDL_DISABLE_SDI
+        assert(fake.sdi_calls == 1);
+#else
+        assert(fake.sdi_calls == 0);
+#endif
         assert(fake.has_oem && fake.dload == 1);
         for (unsigned i = 1; i < 8; ++i) assert(r[i] == 0);
         ++fake.oem_warm; r[0] = (uint64_t)-3; return;
@@ -203,6 +223,7 @@ void kshim_qcom_reboot_smccc(uint64_t r[8])
     assert(r[2] == 0x1fd9000);
     if (fid == 0xc2000501) {
         assert(r[1] == 1); ++fake.dload_reads;
+        if (fake.dload_reads == fake.fail_dload_read) { r[0] = (uint64_t)-5; return; }
         r[0] = 0; r[1] = fake.dload;
         if (fake.dload_reads == fake.corrupt_dload_read) r[1] ^= 0x10;
     } else {
@@ -224,13 +245,13 @@ static void test_targets(void (*setup)(void))
     setup();
     assert(kshim_qcom_reboot_request(blob, KSHIM_QCOM_REBOOT_RECOVERY) ==
            KSHIM_QCOM_REBOOT_RESET_RETURNED);
-    assert(fake.cold == 1 && !fake.warm && fake.reason_values[0] == 3);
+    assert(fake.cold == 1 && !fake.warm && fake.reason_values[0] == 3 && !fake.sdi_calls);
     assert(fake.dload_values[0] == 0 && fake.dload_values[1] == 0x30);
     assert(fake.reason == 0xa5 && fake.dload == 0x30);
     setup();
     assert(kshim_qcom_reboot_request(blob, KSHIM_QCOM_REBOOT_BOOTLOADER) ==
            KSHIM_QCOM_REBOOT_RESET_RETURNED);
-    assert(fake.reason_values[0] == 5 && fake.reason_values[1] == 0xa5);
+    assert(fake.reason_values[0] == 5 && fake.reason_values[1] == 0xa5 && !fake.sdi_calls);
     setup(); fake.reason = 0xa4;
     assert(kshim_qcom_reboot_request(blob, KSHIM_QCOM_REBOOT_RECOVERY) ==
            KSHIM_QCOM_REBOOT_RESET_RETURNED);
@@ -266,10 +287,10 @@ static void test_preflight_and_rollback(void (*setup)(void))
     assert(!fake.dload_writes);
     setup(); fake.fail_dload_write = 1; fake.fail_after_write = 1;
     assert(kshim_qcom_reboot_request(blob, KSHIM_QCOM_REBOOT_EDL) == KSHIM_QCOM_REBOOT_IO_FAILED);
-    assert(fake.dload_writes == 2 && fake.dload == 0x30 && !fake.warm);
+    assert(fake.dload_writes == 2 && fake.dload == 0x30 && !fake.warm && !fake.sdi_calls);
     setup(); fake.corrupt_dload_read = 2;
     assert(kshim_qcom_reboot_request(blob, KSHIM_QCOM_REBOOT_EDL) == KSHIM_QCOM_REBOOT_VERIFY_FAILED);
-    assert(fake.dload == 0x30 && !fake.warm);
+    assert(fake.dload == 0x30 && !fake.warm && !fake.sdi_calls);
     setup(); fake.fail_reason_write = 1;
     assert(kshim_qcom_reboot_request(blob, KSHIM_QCOM_REBOOT_RECOVERY) == KSHIM_QCOM_REBOOT_IO_FAILED);
     assert(fake.reason_writes == 2 && fake.reason == 0xa5 && fake.dload == 0x30 && !fake.cold);
@@ -279,6 +300,66 @@ static void test_preflight_and_rollback(void (*setup)(void))
     setup(); fake.fail_dload_write = 2;
     assert(kshim_qcom_reboot_request(blob, KSHIM_QCOM_REBOOT_EDL) == KSHIM_QCOM_REBOOT_ROLLBACK_FAILED);
     assert(fake.dload == 1);
+}
+
+static void test_edl_sdi_failures(void (*setup)(void))
+{
+#if CONFIG_KSHIM_EDL_DISABLE_SDI
+    setup(); fake.has_oem=1; fake.no_sdi=1;
+    assert(kshim_qcom_reboot_request(blob,KSHIM_QCOM_REBOOT_EDL)==KSHIM_QCOM_REBOOT_UNSUPPORTED);
+    assert(!fake.sdi_calls && !fake.dload_writes && !fake.reason_writes && !fake.oem_warm && !fake.warm);
+    setup(); fake.has_oem=1; fake.fail_sdi=1;
+    assert(kshim_qcom_reboot_request(blob,KSHIM_QCOM_REBOOT_EDL)==KSHIM_QCOM_REBOOT_IO_FAILED);
+    assert(fake.sdi_calls==1 && fake.dload_writes==2 && fake.dload==0x30);
+    assert(!fake.oem_warm && !fake.warm && !fake.cold && !fake.reason_writes);
+    setup(); fake.has_oem=1; fake.fail_sdi=1; fake.fail_dload_write=2;
+    assert(kshim_qcom_reboot_request(blob,KSHIM_QCOM_REBOOT_EDL)==KSHIM_QCOM_REBOOT_ROLLBACK_FAILED);
+    assert(fake.sdi_calls==1 && fake.dload==1 && !fake.oem_warm && !fake.warm);
+#else
+    setup(); fake.has_oem=1; fake.no_sdi=1; fake.fail_sdi=1;
+    assert(kshim_qcom_reboot_request(blob,KSHIM_QCOM_REBOOT_EDL)==KSHIM_QCOM_REBOOT_RESET_RETURNED);
+    assert(fake.oem_warm==1 && !fake.sdi_calls && fake.dload==0x30);
+#endif
+}
+
+static void assert_probe_readonly(void)
+{
+    assert(!fake.dload_writes && !fake.reason_reads && !fake.reason_writes);
+    assert(!fake.prepared && !fake.cold && !fake.warm && !fake.oem_warm && !fake.sdi_calls);
+}
+
+static void test_readonly_edl_probe(void (*setup)(void))
+{
+    struct kshim_qcom_edl_probe p;
+    setup();
+    assert(kshim_qcom_reboot_probe_edl(blob, &p) == 0);
+    assert(p.status == 0 && p.scm_available_mask == 7);
+    assert(p.psci_version == fake.version && p.reset2_status == 0);
+    assert(p.oem_status == 0 && p.oem_available == 0);
+    assert(p.route == KSHIM_QCOM_EDL_ROUTE_PSCI_RESET2);
+    assert(p.dload_address == 0x1fd9000 && p.dload_value == 0x30);
+    assert_probe_readonly();
+    setup(); fake.has_oem = 1; fake.version = 0x10000;
+    assert(kshim_qcom_reboot_probe_edl(blob, &p) == 0);
+    assert(p.oem_available == 1 && p.route == KSHIM_QCOM_EDL_ROUTE_OEM);
+    assert(p.reset2_status == -1); assert_probe_readonly();
+    setup(); fake.no_reset2 = 1;
+    assert(kshim_qcom_reboot_probe_edl(blob, &p) == KSHIM_QCOM_REBOOT_UNSUPPORTED);
+    assert(p.status == KSHIM_QCOM_REBOOT_UNSUPPORTED && !p.route && !fake.dload_reads);
+    assert_probe_readonly();
+    setup(); fake.no_scm = 1;
+    assert(kshim_qcom_reboot_probe_edl(blob, &p) == KSHIM_QCOM_REBOOT_UNSUPPORTED);
+    assert(!p.scm_available_mask && !p.route && !fake.dload_reads);
+    assert_probe_readonly();
+    setup(); fake.fail_dload_read = 1;
+    assert(kshim_qcom_reboot_probe_edl(blob, &p) == KSHIM_QCOM_REBOOT_IO_FAILED);
+    assert(p.status == KSHIM_QCOM_REBOOT_IO_FAILED && !p.route);
+    assert_probe_readonly();
+    setup();
+    assert(kshim_qcom_reboot_probe_edl(NULL, &p) == KSHIM_QCOM_REBOOT_INVALID_DT);
+    assert(!fake.smc_calls && !p.route); assert_probe_readonly();
+    assert(kshim_qcom_reboot_probe_edl(blob, NULL) == KSHIM_QCOM_REBOOT_INVALID_DT);
+    assert(!fake.smc_calls); assert_probe_readonly();
 }
 
 static void test_dt_validation(void)
@@ -405,6 +486,8 @@ int main(int argc, char **argv)
     }
     test_targets(fixture); test_preflight_and_rollback(fixture);
     test_dt_validation();
+    test_edl_sdi_failures(fixture); test_edl_sdi_failures(sun_fixture);
+    test_readonly_edl_probe(fixture); test_readonly_edl_probe(sun_fixture);
     /* Run the Sun parse-success check before its shared target/rollback
      * checks so a rejecting build prints the diagnostic and fails here. */
     test_sun_parse(); test_sun_invalid_dt();

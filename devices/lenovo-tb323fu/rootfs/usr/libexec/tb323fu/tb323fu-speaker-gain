@@ -7,15 +7,42 @@
 # Run by the user unit tb323fu-speaker-gain.service, bound to pipewire.service:
 # the amplifiers are only opened up while PipeWire (and its protecting filter)
 # runs. Needs the audio group (ALSA control device).
+# Model gate first, before the config, the card lookup or any amixer access: one
+# exact NUL-delimited device-tree token. A longer token such as lenovo,baldur-x
+# does not match, and no other board reaches the amplifier controls.
+compat=${TB323FU_DT_COMPATIBLE:-/sys/firmware/devicetree/base/compatible}
+if ! grep -azFxq lenovo,baldur "$compat" 2>/dev/null; then
+	echo "not lenovo,baldur; nothing to do" >&2
+	exit 0
+fi
 SPEAKER_ATTEN=159
 SPEAKER_ATTEN_PROTECTED=21
 [ -r /etc/tb323fu/audio.conf ] && . /etc/tb323fu/audio.conf
+# The card id is exact: only a card whose /sys/class/sound/card*/id reads
+# LENOVOTB323FU counts, and only the numeric index of that card directory is
+# used. Similar names (LENOVO Gen4 and friends) and any other card are ignored.
+sound_class=${TB323FU_SOUND_CLASS:-/sys/class/sound}
+find_card() {
+	for id_file in "$sound_class"/card*/id; do
+		[ -f "$id_file" ] || continue
+		[ "$(cat "$id_file" 2>/dev/null)" = LENOVOTB323FU ] || continue
+		base=${id_file%/id}
+		base=${base##*/}
+		idx=${base#card}
+		case $idx in
+		"" | *[!0-9]*) continue ;;
+		esac
+		printf '%s\n' "$idx"
+		return 0
+	done
+	return 1
+}
 # One initial lookup is enough for off/status (immediate, unchanged). For "on"
 # the card may register a few seconds after this oneshot starts; a still missing
 # card is waited for, bounded (at most 21 queries, 20 * 0.5 s), instead of being
 # reported as a completed attenuation. A missing card never runs amixer and
 # never opens the amplifiers to 21.
-card=$(awk '/LENOVO|TB323FU/{print $1; exit}' /proc/asound/cards)
+card=$(find_card)
 if [ -z "$card" ]; then
 	case $1 in
 	on)
@@ -23,14 +50,14 @@ if [ -z "$card" ]; then
 		until [ -n "$card" ]; do
 			i=$((i + 1))
 			if [ "$i" -gt 20 ]; then
-				echo "no TB323FU sound card" >&2
+				echo "no LENOVOTB323FU sound card" >&2
 				exit 1
 			fi
 			sleep 0.5 || { echo "sleep failed" >&2; exit 1; }
-			card=$(awk '/LENOVO|TB323FU/{print $1; exit}' /proc/asound/cards)
+			card=$(find_card)
 		done ;;
 	*)
-		echo "no TB323FU sound card"
+		echo "no LENOVOTB323FU sound card"
 		exit 0 ;;
 	esac
 fi

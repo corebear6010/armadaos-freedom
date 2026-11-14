@@ -6,11 +6,20 @@
 #   ABS_SOURCE : absolute path to the script under test (production helper)
 #   ABS_OUTDIR : absolute path to a FRESH output directory (must not exist)
 #
-# The test writes all its new files only inside ABS_OUTDIR (bin/ mocks, logs/).
-# It never deletes existing files and never scans outside ABS_OUTDIR.
-# Every external tool the source uses is mocked inside ABS_OUTDIR/bin, so no
-# real audio server / device / network / service is touched. pw-cli and
-# pw-metadata are mocked to rc 127 (the original missing-dependency case).
+# The test writes all its new files only inside ABS_OUTDIR (fixtures/ bin/
+# mocks, logs/). It never deletes existing files and never scans outside
+# ABS_OUTDIR, apart from the single explicit /etc guard described below.
+# Every external tool the source uses is mocked inside
+# ABS_OUTDIR/bin, so no real audio server / device / network / service is
+# touched. pw-cli and pw-metadata are mocked to rc 127 (the original
+# missing-dependency case).
+#
+# The model gate reads a NUL-delimited device-tree fixture and the card lookup
+# reads <sound class>/card*/id, both files under ABS_OUTDIR. Only the mocked
+# `cat` sees the fixture card id; every other cat is delegated to the real one.
+# The production helper sources the fixed path /etc/tb323fu/audio.conf when it
+# exists and has no environment override for it, so the test refuses to run on a
+# host that has that file instead of silently testing the host's values.
 #
 # SCENARIO selects the mock behavior; the source is always invoked as
 #   /bin/sh SOURCE on|off|status
@@ -35,7 +44,12 @@
 #   card_delayed_3rd   sound card absent on probes 1-2, present(0)  -> rc0 21/21, probe3 wait2
 #   card_missing       sound card never appears                     -> rc!=0, no amixer, <=20 waits
 #   card_sleep_fail    sound card absent and the wait itself fails  -> rc!=0, no amixer
-# The last three pin the sound-card RETRY contract: a missing card is waited
+#   gen4               compatible is lenovo,baldur-gen4 alone       -> rc0, no pactl/amixer/probe
+#   gen4card           card id "LENOVO Gen4" (similar, not exact)   -> rc!=0, no amixer, waits
+#   simcard            card id "LENOVOTB323FU-extra" (not exact)    -> rc!=0, no amixer, waits
+# The last three pin the exact model token and the exact LENOVOTB323FU card id:
+# neither a longer device-tree token nor a similar card id may reach the amps.
+# The card cases pin the sound-card RETRY contract: a missing card is waited
 # out (bounded, 0.5 s steps) and never faked as success. The old behavior
 # "first probe missing -> exit 0, amps untouched" fails card_delayed_3rd.
 
@@ -50,9 +64,27 @@ case $OUT in /*) ;; *) echo "outdir must be an absolute path: $OUT" >&2; exit 2 
 [ -f "$SRC" ] && [ -r "$SRC" ] || { echo "source is not a readable file: $SRC" >&2; exit 2; }
 if [ -e "$OUT" ]; then echo "outdir already exists (refusing): $OUT" >&2; exit 2; fi
 
+# The source reads /etc/tb323fu/audio.conf from a fixed path with no override.
+# It is absent in the container; refuse a host where it would be sourced.
+if [ -e /etc/tb323fu/audio.conf ]; then
+	echo "refusing: /etc/tb323fu/audio.conf exists and would be sourced" >&2
+	exit 2
+fi
+
 BIN=$OUT/bin
 LOGS=$OUT/logs
 mkdir -p "$BIN" "$LOGS" || exit 2
+
+# ---- fixtures (all new files live under $OUT) ------------------------------
+
+MODEL=$OUT/model
+COMPAT=$MODEL/compatible
+COMPAT_GEN4=$MODEL/compatible-gen4
+SOUNDCLASS=$OUT/sound
+mkdir -p "$MODEL" "$SOUNDCLASS/card0" || exit 2
+printf 'lenovo,baldur\000qcom,kaanapali\000' > "$COMPAT" || exit 2
+printf 'lenovo,baldur-gen4\000qcom,kaanapali-gen4\000' > "$COMPAT_GEN4" || exit 2
+printf 'LENOVOTB323FU' > "$SOUNDCLASS/card0/id" || exit 2
 
 # ---- mocks (all new files live under $OUT) ---------------------------------
 
@@ -125,21 +157,25 @@ case "${SCENARIO:-}" in card_sleep_fail) exit 1 ;; esac
 exit 0
 EOF
 
-cat > "$BIN/awk" <<'EOF' || exit 2
+cat > "$BIN/cat" <<'EOF' || exit 2
 #!/bin/sh
 cd="${CASE_DIR:?CASE_DIR unset}"
-case "$*" in
-*/proc/asound/cards*)
-	n=$(cat "$cd/card.count" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "$cd/card.count"
-	printf 'card.query %s\n' "$n" >> "$cd/cmd.log"
-	case "${SCENARIO:-}" in
-	card_missing | card_sleep_fail) exit 0 ;;
-	card_delayed_3rd) [ "$n" -ge 3 ] && printf '0\n'; exit 0 ;;
-	*) printf '0\n'; exit 0 ;;
-	esac ;;
-*)
-	exec /usr/bin/awk "$@" ;;
-esac
+fixture="${CARDFIXTURE:?CARDFIXTURE unset}"
+for arg in "$@"; do
+	case "$arg" in
+	"$fixture"/card*/id)
+		n=$(/usr/bin/cat "$cd/card.count" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "$cd/card.count"
+		printf 'card.query %s\n' "$n" >> "$cd/cmd.log"
+		case "${SCENARIO:-}" in
+		card_missing | card_sleep_fail) exit 0 ;;
+		card_delayed_3rd) [ "$n" -ge 3 ] && printf 'LENOVOTB323FU'; exit 0 ;;
+		gen4card) printf 'LENOVO Gen4'; exit 0 ;;
+		simcard) printf 'LENOVOTB323FU-extra'; exit 0 ;;
+		*) printf 'LENOVOTB323FU'; exit 0 ;;
+		esac ;;
+	esac
+done
+exec /usr/bin/cat "$@"
 EOF
 
 cat > "$BIN/pw-cli" <<'EOF' || exit 2
@@ -152,7 +188,7 @@ cat > "$BIN/pw-metadata" <<'EOF' || exit 2
 exit 127
 EOF
 
-chmod +x "$BIN/pactl" "$BIN/amixer" "$BIN/sleep" "$BIN/awk" "$BIN/pw-cli" "$BIN/pw-metadata" || exit 2
+chmod +x "$BIN/pactl" "$BIN/amixer" "$BIN/sleep" "$BIN/cat" "$BIN/pw-cli" "$BIN/pw-metadata" || exit 2
 
 # ---- assertion helpers -----------------------------------------------------
 
@@ -206,7 +242,11 @@ run_case() { # name scenario args...
 	shift 2
 	CD=$LOGS/$cname
 	mkdir -p "$CD" || exit 2
+	: > "$CD/cmd.log"
+	case $scen in gen4) compat=$COMPAT_GEN4 ;; *) compat=$COMPAT ;; esac
 	PATH="$BIN:$PATH" SCENARIO=$scen CASE_DIR=$CD \
+		TB323FU_DT_COMPATIBLE=$compat TB323FU_SOUND_CLASS=$SOUNDCLASS \
+		CARDFIXTURE=$SOUNDCLASS \
 		/bin/sh "$SRC" "$@" > "$CD/stdout.log" 2> "$CD/stderr.log"
 	RC=$?
 	SETN=$(cat "$CD/set.count" 2>/dev/null || echo 0)
@@ -319,6 +359,38 @@ nonzero "$cname rc" "$RC"
 eq "$cname amixer calls" 0 "$AMIXTOTAL"
 range "$cname waits" 1 20 "$SLEEPN"
 never21
+
+# 17 compatible is lenovo,baldur-gen4: a longer token is not the exact
+# NUL-delimited lenovo,baldur, so the model gate exits 0 before the config,
+# the card lookup and every amixer/pactl call.
+run_case gen4 gen4 on
+expect 0 "" "" 0
+eq "$cname amixer calls" 0 "$AMIXTOTAL"
+eq "$cname pactl calls" 0 "$PACTLTOTAL"
+eq "$cname card probes" 0 "$CARDQ"
+never21
+waits05
+
+# 18 the sound card id reads "LENOVO Gen4": similar but not the exact
+# LENOVOTB323FU, so the card is never found, the wait is bounded, no amixer
+# write happens and the amps are never opened to 21.
+run_case gen4card gen4card on
+nonzero "$cname rc" "$RC"
+eq "$cname amixer calls" 0 "$AMIXTOTAL"
+range "$cname card probes" 1 21 "$CARDQ"
+range "$cname waits" 1 20 "$SLEEPN"
+never21
+waits05
+
+# 19 the sound card id reads "LENOVOTB323FU-extra": an exact id match is
+# required, so the longer id is rejected exactly like a missing card.
+run_case simcard simcard on
+nonzero "$cname rc" "$RC"
+eq "$cname amixer calls" 0 "$AMIXTOTAL"
+range "$cname card probes" 1 21 "$CARDQ"
+range "$cname waits" 1 20 "$SLEEPN"
+never21
+waits05
 
 # ---- summary ---------------------------------------------------------------
 

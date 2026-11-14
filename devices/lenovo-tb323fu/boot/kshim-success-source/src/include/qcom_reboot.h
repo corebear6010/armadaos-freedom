@@ -32,6 +32,24 @@ int kshim_qcom_reboot_parse(const void *hardware_fdt,
 int kshim_qcom_reboot_request(const void *hardware_fdt,
                             enum kshim_qcom_reboot_target target);
 
+/* Read-only diagnostic of the existing EDL selection rules. This never writes
+ * a download cookie, touches SPMI or invokes either reset operation. */
+enum kshim_qcom_edl_route {
+    KSHIM_QCOM_EDL_ROUTE_NONE,
+    KSHIM_QCOM_EDL_ROUTE_OEM,
+    KSHIM_QCOM_EDL_ROUTE_PSCI_RESET2,
+};
+struct kshim_qcom_edl_probe {
+    int32_t status;
+    uint32_t scm_available_mask, psci_version;
+    int32_t reset2_status, oem_status;
+    uint32_t oem_available;
+    uint64_t dload_address;
+    uint32_t dload_value, route;
+};
+int kshim_qcom_reboot_probe_edl(const void *hardware_fdt,
+                               struct kshim_qcom_edl_probe *report);
+
 /* Weak hardware boundaries allow host tests to observe exact transactions.
  * The default SPMI adapter permits only the DT-selected SDAM byte. */
 void kshim_qcom_reboot_smccc(uint64_t registers[8]);

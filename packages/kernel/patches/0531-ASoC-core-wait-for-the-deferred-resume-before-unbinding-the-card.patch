@@ -1,0 +1,87 @@
+From: lich.wang <lich.wang@gmail.com>
+Subject: [PATCH] ASoC: core: wait for the deferred resume before unbinding the card
+
+snd_soc_resume() queues card->deferred_resume_work, which walks the
+card's components and calls their resume callbacks.  Nothing waits for
+that work when the card is unbound, so a component that goes away while
+the work is running is used after it was freed.
+
+0530 makes this reachable: q6apm_lpass_dai_resume() reopens AudioReach
+graphs and waits for the DSP.  If the ADSP crashed around the suspend,
+its recovery (rproc_recovery_wq is freezable, so it runs right after
+thaw) unregisters the GPR devices and the q6apm DAI components while the
+resume work is still waiting; the work then logs through the freed
+component device and the kworker dies holding the card's locks:
+
+  CMD timeout for [1001000] opcode
+  Failed to open graph 40 in the DSP (-110)
+  Unable to handle kernel paging request at virtual address 006b6e696c673a63
+  pc : dev_driver_string+0x10/0x48
+   _dev_err
+   q6apm_graph_open
+   q6apm_lpass_dai_resume
+   snd_soc_component_resume
+   soc_resume_deferred
+
+Flush the work before the card loses its components: in
+snd_soc_del_component_unlocked() before the component's DAIs are
+unregistered, and in snd_soc_unbind_card() once card->instantiated is
+clear, after which snd_soc_resume() no longer queues it.  The work only
+exists on a card that was bound, so both flushes are limited to an
+instantiated card.  Both unregister paths hold client_mutex; neither
+soc_resume_deferred() nor any in-tree component resume callback takes
+it, and no in-tree resume callback unregisters a component, so the
+flush cannot wait on itself.  The cost is that an unbind racing a resume
+now waits for the resume callbacks to finish (with q6apm, until its DSP
+commands time out).
+
+Link: https://github.com/mydanyi/armadaos-freedom/issues/17
+---
+--- a/sound/soc/soc-core.c
++++ b/sound/soc/soc-core.c
+@@ -823,10 +823,24 @@
+ 	/* deferred resume work */
+ 	INIT_WORK(&card->deferred_resume_work, soc_resume_deferred);
+ }
++
++/*
++ * The deferred resume work walks the card's components and calls their
++ * resume callbacks, which may wait on firmware (an AudioReach graph open
++ * waits for the DSP).  A component can be unregistered meanwhile, e.g. when
++ * the DSP that hosts it restarts, so wait for the work before the card
++ * loses its components.  Only valid on a card that was bound, as the work
++ * is initialised at bind time.
++ */
++static void soc_resume_flush(struct snd_soc_card *card)
++{
++	flush_work(&card->deferred_resume_work);
++}
+ #else
+ #define snd_soc_suspend NULL
+ #define snd_soc_resume NULL
+ static inline void soc_resume_init(struct snd_soc_card *card) { }
++static inline void soc_resume_flush(struct snd_soc_card *card) { }
+ #endif
+ 
+ static struct device_node
+@@ -1996,6 +2010,9 @@
+ {
+ 	if (snd_soc_card_is_instantiated(card)) {
+ 		card->instantiated = false;
++
++		/* snd_soc_resume() no longer queues the work once this is clear */
++		soc_resume_flush(card);
+ 
+ 		snd_soc_remove_device_links(card);
+ 
+@@ -2694,6 +2711,10 @@
+ {
+ 	struct snd_soc_card *card = component->card;
+ 	bool instantiated;
++
++	/* a running resume may still use this component's DAIs */
++	if (card && snd_soc_card_is_instantiated(card))
++		soc_resume_flush(card);
+ 
+ 	snd_soc_unregister_dais(component);
+ 

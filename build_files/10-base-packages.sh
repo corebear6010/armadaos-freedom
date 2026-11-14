@@ -12,6 +12,7 @@ dnf5 -y install --setopt=install_weak_deps=False \
     pipewire-pulseaudio \
     pulseaudio-utils \
     wireplumber \
+    ladspa-swh-plugins \
     alsa-lib \
     alsa-ucm \
     alsa-utils \
@@ -23,6 +24,7 @@ dnf5 -y install --setopt=install_weak_deps=False \
     bluez \
     dbus-broker \
     python3-gobject \
+    iio-sensor-proxy \
     gtk4 \
     libadwaita \
     python3-websocket-client \
@@ -45,6 +47,7 @@ dnf5 -y install --setopt=install_weak_deps=False \
     libxcrypt-compat \
     sdl2-compat \
     evtest \
+    libgpiod-utils \
     dbus-x11 \
     xdg-user-dirs \
     xdg-terminal-exec \
@@ -94,6 +97,11 @@ dnf5 -y install --setopt=install_weak_deps=False \
 
 dnf5 -y install --setopt=install_weak_deps=False \
     /packages/umtp-responder/umtp-responder-*.rpm
+
+# The Chinese btop fork is a separate package: Fedora's btop above stays the
+# English command, and this only adds /usr/libexec/armada/btop-cn beside it.
+dnf5 -y install --setopt=install_weak_deps=False \
+    /packages/btop-cn/btop-cn-[0-9]*.aarch64.rpm
 
 # kshim-tools scripts run under python3 and call dtc, gzip and openssl.
 dnf5 -y install --setopt=install_weak_deps=False \
@@ -158,10 +166,6 @@ dnf5 -y install --setopt=install_weak_deps=False \
     /packages/kwin/kwin-common-[0-9]*.rpm \
     /packages/kwin/kwin-libs-[0-9]*.rpm
 
-# Carry Plasma Mobile's input-region crash fix until Fedora backports it.
-dnf5 -y install --setopt=install_weak_deps=False \
-    /packages/plasma-mobile/plasma-mobile-[0-9]*.rpm \
-    /packages/plasma-mobile/plasma-lookandfeel-fedora-mobile-[0-9]*.rpm
 
 # PowerDevil's KWin backend treats 0 as safe; reserve 5% for internal panels.
 dnf5 -y install --setopt=install_weak_deps=False /packages/powerdevil/powerdevil-*.fc44.armada.*.rpm

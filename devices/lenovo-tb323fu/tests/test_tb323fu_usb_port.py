@@ -116,6 +116,7 @@ class UsbPortTestBase(unittest.TestCase):
                  udc="not attached", func="g1"):
         """portN: None (no partner) or (power_role, data_role) strings."""
         files = {
+            "firmware/devicetree/base/compatible": "lenovo,baldur\0qcom,kaanapali\0",
             "class/usb_role/a600000.usb-role-switch/role": role + "\n",
             "class/udc/a600000.usb/state": udc + "\n",
             "class/udc/a600000.usb/function": func + "\n",
@@ -181,6 +182,51 @@ LONG_SINK = ("source [sink]", "host [device]")    # charger on port0 (bottom)
 SHORT_HOST = ("[source] sink", "[host] device")   # gamepad on port1 (side)
 LONG_HOST = ("[source] sink", "[host] device")    # real host on port0
 SHORT_SINK = ("source [sink]", "host [device]")   # sink on port1
+
+
+class BoardIsolationTests(UsbPortTestBase):
+    def _assert_untouched(self):
+        before = self._role_mtime()
+        result = self._run()
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(self._role(), "device")
+        self.assertEqual(self._role_mtime(), before)
+        self.assertEqual(self._gpio_value(), "0")
+        self.assertEqual(self._gpioset_calls(), [])
+        self.assertFalse(os.path.exists(os.path.join(
+            self.base, "run/lock/tb323fu-usb-port.lock")))
+
+    def test_other_board_does_not_touch_routing(self):
+        self._fixture(port0=LONG_SINK, port1=SHORT_HOST)
+        self._gpio("0")
+        self._write_file(os.path.join(self.sysdir,
+            "firmware/devicetree/base/compatible"),
+            "lenovo,baldur-other\0qcom,kaanapali\0")
+        self._assert_untouched()
+
+    def test_missing_board_identity_does_not_touch_routing(self):
+        self._fixture(port0=LONG_SINK, port1=SHORT_HOST)
+        self._gpio("0")
+        os.unlink(os.path.join(self.sysdir,
+            "firmware/devicetree/base/compatible"))
+        self._assert_untouched()
+
+    def test_gen4_board_does_not_touch_routing(self):
+        # the real Gen4 compatible string: no Baldur identity, so untouched
+        self._fixture(port0=LONG_SINK, port1=SHORT_HOST)
+        self._gpio("0")
+        self._write_file(os.path.join(self.sysdir,
+            "firmware/devicetree/base/compatible"),
+            "lenovo,elden\0qcom,sm8750\0")
+        self._assert_untouched()
+
+    def test_same_soc_without_baldur_identity_does_not_touch_routing(self):
+        # a generic same-SoC board string alone must not match by SoC
+        self._fixture(port0=LONG_SINK, port1=SHORT_HOST)
+        self._gpio("0")
+        self._write_file(os.path.join(self.sysdir,
+            "firmware/devicetree/base/compatible"), "qcom,kaanapali\0")
+        self._assert_untouched()
 
 
 class HostCandidateTests(UsbPortTestBase):

@@ -12,3 +12,8 @@ __pycache__/
 /devices/lenovo-tb323fu/docs/*-202610*.md
 /docs/y700-g9-integration.md
 
+# decky/plugin-sources.json is the source of truth; the resolver generates these
+/decky/bundled-plugins/plugins.lock.json
+/decky/bundled-plugins/plugins.resolved.json
+/decky/bundled-plugins/assets/
+

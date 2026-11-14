@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: MIT
+# Firmware, topology search path and ADSP for the TB323FU speaker path. The
+# helper exits 0 without touching anything unless the exact lenovo,baldur
+# device-tree token is present, so this unit is safe on every other device.
+[Unit]
+Description=TB323FU audio firmware and ADSP prepare
+# Runs on the real root filesystem with the device nodes present, and before
+# anything that waits for the sound card or a session.
+After=local-fs.target systemd-udev-trigger.service
+Before=sound.target display-manager.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/tb323fu/tb323fu-audio-prepare
+StandardOutput=journal
+StandardError=journal
+# No ExecStop: this unit never stops or restarts a DSP.
+
+[Install]
+WantedBy=multi-user.target

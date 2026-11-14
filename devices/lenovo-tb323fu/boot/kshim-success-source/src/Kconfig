@@ -1,5 +1,97 @@
 mainmenu "kShimC $(VERSION) Configuration"
 
+config KSHIM_STORAGE_ENTRY_PROBE
+    bool "Capture read-only TB322FC/TB323FU UFS/SMMU entry state"
+    default n
+    help
+        Diagnostic only. Reads a bounded register whitelist on an actual
+        TB322FC or TB323FU at EL1 with the early MMU enabled, then exports
+        it to the selected Linux tree. Does not initialize storage or submit
+        DMA. A precise synchronous read abort can be reported; a bus lockup
+        or asynchronous error still requires physical recovery.
+
+config KSHIM_UFS_NATIVE_IO
+    bool "Expose bounded native UFS MMIO/DMA-memory primitives"
+    default n
+    help
+        Adds a bounded register writer plus CPU mapping and
+        cache helpers for the native UFS IO profile. It performs no disk
+        operation and neither claims the controller nor owns DMA mappings;
+        the caller must supply an isolated arena and prove the live SMMU.
+
+config KSHIM_UFS_READ_PROBE
+    bool "One-shot read-only native UFS read diagnostic"
+    depends on KSHIM_STORAGE_ENTRY_PROBE && KSHIM_UFS_NATIVE_IO
+    default n
+    help
+        Diagnostic only. Runs the validated read-only sequence once at boot
+        entry on an actual TB322FC or TB323FU: LUN 0 capacity, a backup-GPT
+        lookup and one header/tail block read. It claims and releases the
+        firmware queues and writes no disk, SMMU or clock register. A release
+        failure halts before any payload handoff.
+
+config KSHIM_UFS_READ_SCREEN
+    bool "Show early UFS read diagnostics on the scanout"
+    depends on KSHIM_UFS_READ_PROBE && KSHIM_FRAMEBUFFER
+    default n
+    help
+        Diagnostic only. Paints the last operation of the one-shot read-only
+        UFS sequence into the top strip of the live scanout on an actual
+        TB322FC, starting immediately before the capture. It reuses the
+        read-only splash parser and the existing MMU mapping for the scanout
+        span, never reinitialises the display controller, never writes to the
+        disk and stores nothing outside that strip. The storage IO order,
+        report layout and unsafe-release halt are unchanged.
+
+config KSHIM_UFS_LINK_WAKE
+    bool "Manage inherited UFS link power"
+    depends on KSHIM_UFS_NATIVE_IO
+    default n
+    help
+        Native transactions query the MPHY TX
+        FSM state the firmware left behind and, when the link is HIBERN8,
+        exits it before the first command and restores the entry state on
+        release. No HCE/reset, clock, SMMU or disk write is issued. The
+        bounded native writer accepts the exact UIC command/argument pairs
+        this sequence needs only while this option is enabled.
+
+config KSHIM_UFS_DEVICE_WAKE
+    bool "Resume inherited UFS device power"
+    depends on KSHIM_UFS_NATIVE_IO && KSHIM_UFS_LINK_WAKE
+    default n
+    help
+        Query the device power mode after the link is ready. Wake only a
+        confirmed SLEEP or POWERDOWN device, and verify its ACTIVE mode
+        before accessing LUN 0. Restore and verify the original mode before
+        returning the link and queues to firmware. No disk data is written;
+        an unverified restore prevents payload handoff.
+
+config KSHIM_UFS_SETTINGS
+    bool "Persist launcher settings in provisioned internal UFS backup space"
+    depends on KSHIM_UFS_NATIVE_IO && KSHIM_UFS_LINK_WAKE && KSHIM_UFS_DEVICE_WAKE
+    default n
+    help
+        Load and save only an existing v3 settings region on the actual board.
+        Each transaction reclaims and restores the firmware controller state.
+        Old or unprovisioned backups are never formatted by the launcher.
+
+config KSHIM_SETTINGS_SAVE_TEST
+    bool "Gen4 test: seed an EMPTY provisioned settings store with internal Linux"
+    depends on KSHIM_UFS_SETTINGS
+    default n
+    help
+        Explicit hardware write-test profile. Only an existing EMPTY Gen4
+        settings pair is written, once, with AUTO/internal Linux/Chinese.
+        Existing settings and unprovisioned backups are left untouched.
+
+config KSHIM_TB323FU_ANDROID_TOUCH_4M8
+    bool "Preserve TB323FU Android touch SPI compatibility"
+    default n
+    help
+        Keep the original Android NVT controller at 4.8 MHz on TB323FU.
+        Applies only to the detected board's original Android device tree;
+        does not enable touch input in the launcher or change Linux trees.
+
 config KSHIM_BOOT_TIMING
     bool "Record boot stages in the selected Linux device tree"
     default n
@@ -8,6 +100,24 @@ config KSHIM_QCOM_REBOOT
     bool "DT-selected Qualcomm recovery, bootloader and EDL targets"
     depends on QCOM_SPMI
     default n
+
+config KSHIM_EDL_DISABLE_SDI
+    bool "Disable SDI before Qualcomm EDL reset"
+    depends on KSHIM_QCOM_REBOOT
+    default n
+    help
+        Disable watchdog debug and SDI before EDL reset on TB322FC and
+        TB323FU. Firmware support is checked before changing the download
+        cookie; preparation failure restores its previous value.
+
+config KSHIM_EDL_PROBE
+    bool "Report read-only Qualcomm EDL reset capabilities to Linux"
+    depends on KSHIM_QCOM_REBOOT && KSHIM_UFS_SETTINGS
+    default n
+    help
+        Diagnostic only. Query the existing reset paths and read the DT-selected
+        download cookie before the menu. Export results to the Linux device tree;
+        do not change cookies, settings, reset selection or invoke a reset.
 
 config KSHIM_MENU_ADVANCED_ACTIONS
     bool "Group diagnostic and recovery targets in an advanced menu"

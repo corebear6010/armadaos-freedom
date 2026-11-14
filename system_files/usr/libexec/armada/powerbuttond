@@ -1,5 +1,7 @@
 #!/bin/bash
-# Power button + lid -> Steam's sleep flow while Game Mode owns the keys.
+# Power button + lid while Game Mode owns the keys: a short press toggles the
+# display only (no sleep, no frozen apps, no muted audio), a long press opens
+# Steam's power menu, and lid close still runs Steam's sleep flow.
 set -uo pipefail
 
 SESSION_USER="${ARMADA_SESSION_USER:-armada}"
@@ -10,6 +12,10 @@ POWER_DEVICE_WAIT_SEC="${ARMADA_POWERBUTTON_DEVICE_WAIT_SEC:-15}"
 USER_RUNTIME_DIR="${ARMADA_USER_RUNTIME_DIR:-${XDG_RUNTIME_DIR:-/run/user/$(id -u)}}"
 PID_FILE="${ARMADA_POWERBUTTON_PID_FILE:-${USER_RUNTIME_DIR}/armada-powerbuttond/pid}"
 LID_CLOSE_MARKER="${ARMADA_LID_CLOSE_MARKER:-${USER_RUNTIME_DIR}/armada-powerbuttond/lid-close-ms}"
+# A wedged gamescope must never stall the button handler.
+SCREEN_TIMEOUT_SEC="${ARMADA_POWERBUTTON_SCREEN_TIMEOUT_SEC:-5}"
+# Set only while this daemon turned the displays off and has not restored them.
+SCREEN_OFF=0
 
 log() { logger -t armada-powerbuttond -- "$*"; }
 source /usr/lib/armada/input-lib 2>/dev/null || true
@@ -41,6 +47,100 @@ wait_for_power_device() {
     done
 }
 
+# Real gamescope display sockets only: the -ei input socket, the lock file and
+# the primary/secondary aliases are not drm_sleep_internal_screen targets.
+gamescope_sockets() {
+    local sock name
+    for sock in "${USER_RUNTIME_DIR}"/gamescope-*; do
+        [[ -S "$sock" ]] || continue
+        name="$(basename "$sock")"
+        [[ "$name" =~ ^gamescope-[0-9]+$ ]] || continue
+        printf '%s\n' "$name"
+    done
+}
+
+# gamescopectl reads the socket from both display variables. Unlike fake-suspend
+# there is no sysfs/backlight fallback here: a refused request is an error.
+gamescope_screen() {
+    local sock="$1" state="$2"
+    timeout "$SCREEN_TIMEOUT_SEC" env \
+        XDG_RUNTIME_DIR="$USER_RUNTIME_DIR" \
+        WAYLAND_DISPLAY="$sock" \
+        GAMESCOPE_WAYLAND_DISPLAY="$sock" \
+        gamescopectl drm_sleep_internal_screen "$state" >/dev/null 2>&1
+}
+
+# Prints every socket the request was sent to, including refusals: a failed
+# gamescopectl may still have blanked that panel, so the caller has to undo
+# every attempt. Non-zero if any socket (or no socket at all) refused.
+powerbutton_display_all() {
+    local state="$1" sock tried=0 changed=0 failed=0
+    while IFS= read -r sock; do
+        tried=1
+        printf '%s\n' "$sock"
+        if gamescope_screen "$sock" "$state"; then
+            changed=1
+        else
+            log "gamescopectl drm_sleep_internal_screen $state failed on $sock"
+            failed=1
+        fi
+    done < <(gamescope_sockets)
+    if (( ! tried )); then
+        log "no gamescope display socket for drm_sleep_internal_screen $state"
+        failed=1
+    elif (( ! changed )); then
+        log "no gamescope socket accepted drm_sleep_internal_screen $state"
+    fi
+    return "$failed"
+}
+
+# Turn every display off. The off state is only recorded once every socket
+# accepted it; a partial failure restores every attempted socket, and an
+# unconfirmed restore keeps the off state so the next press retries on.
+powerbutton_screen_off() {
+    local sock attempted
+    if attempted="$(powerbutton_display_all 1)"; then
+        SCREEN_OFF=1
+        log "display off (short power press)"
+        return 0
+    fi
+    while IFS= read -r sock; do
+        [[ -n "$sock" ]] || continue
+        if ! gamescope_screen "$sock" 0; then
+            # This panel may still be dark: remember it so the next press
+            # restores instead of blanking an already dark display.
+            SCREEN_OFF=1
+            log "failed to restore display $sock; keeping display off for retry"
+        fi
+    done <<< "$attempted"
+    return 1
+}
+
+# Restore the displays only when this daemon owns the off state, so launching or
+# a short press that never turned anything off cannot flash the screen.
+powerbutton_screen_on() {
+    (( SCREEN_OFF )) || return 0
+    if ! powerbutton_display_all 0 >/dev/null; then
+        # Keep the off state: a later retry still knows the panel is dark.
+        log "display on failed; keeping display off for retry"
+        return 1
+    fi
+    SCREEN_OFF=0
+    log "display on (short power press)"
+}
+
+powerbutton_screen_toggle() {
+    if (( SCREEN_OFF )); then
+        powerbutton_screen_on || log "display on failed; still off, next press retries on"
+    elif ! powerbutton_screen_off; then
+        if (( SCREEN_OFF )); then
+            log "display off failed; restore unconfirmed, next press retries on"
+        else
+            log "display off failed; displays restored"
+        fi
+    fi
+}
+
 lidpid=
 power_event_pid=
 
@@ -61,6 +161,8 @@ powerbutton_stop_watchers() {
 
 powerbutton_cleanup() {
     powerbutton_stop_watchers
+    # A stopped or restarting service must not strand the panel off.
+    powerbutton_screen_on || log "display restore failed on cleanup"
     rm -f -- "$LID_CLOSE_MARKER"
     if [[ -f "$PID_FILE" ]] && [[ "$(<"$PID_FILE")" == "$$" ]]; then
         rm -f -- "$PID_FILE"
@@ -74,6 +176,14 @@ powerbutton_mark_lid_close() {
 
 powerbutton_reexec() {
     trap - USR1
+    # The reexecuted daemon starts with SCREEN_OFF=0, so an owned off state must
+    # be restored before the watchers go away. If that restore fails, keep this
+    # process (and its state) instead of exec'ing into a daemon that forgot it.
+    if ! powerbutton_screen_on; then
+        log "display restore failed before reexec; keeping daemon and off state"
+        trap powerbutton_reexec USR1
+        return 0
+    fi
     powerbutton_stop_watchers
     exec /bin/bash "$0"
     exit 1
@@ -145,7 +255,9 @@ powerbutton_main() {
                 ;;
         esac
 
-        if (( read_result > 128 )) && [[ "$state" == held ]]; then
+        if (( read_result > 128 )); then
+            # A long-press timeout, or a handled signal such as a reexec that
+            # could not restore the display: the stream is still open.
             continue
         elif (( read_result != 0 )); then
             log "power-button event stream ended"
@@ -156,8 +268,8 @@ powerbutton_main() {
             held)
                 case "$line" in
                     *"(KEY_POWER), value 0"*)
-                        log "short press -> shortpowerpress"
-                        steam_uri shortpowerpress
+                        log "short press -> display toggle"
+                        powerbutton_screen_toggle
                         state=idle
                         ;;
                 esac

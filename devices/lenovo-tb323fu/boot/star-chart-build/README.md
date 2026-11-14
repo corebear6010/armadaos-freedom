@@ -4,6 +4,24 @@
 
 当前统一 Linux 7.2.6 的五代引导使用外置 initramfs。完整流程是准备本机原厂 Android 输入、构建 runtime、生成匹配内核的 initramfs，再打包 boot；所需原厂输入和依赖须自行准备。
 
+## 免解锁设备的签名处理
+
+每次修改共享 `boot_a` 后，都必须完成签名处理和核验，包括只替换 kShimC、Linux、DTB 或 initramfs。打包成功与能进入系统不能替代这一步。
+
+本目录的 `repack_boot_v4.py` 用于匹配且已验证的 RAM-patched ABL 链，重打包时恢复原厂已签名 vbmeta，并保留原 GKI 签名（若有）。脚本拒绝无签名或签名损坏的输入，校验原 vbmeta 的 RSA 签名，写入后重新检查签名区域与来源逐字节一致。`build_offline_boot.py` 会对实际产物再次执行相同核验；这是恢复原签名材料，不是重新生成 OEM 签名，也不代表修改后的内容通过通用 AVB 校验。不能将此方法用于未经验证的其它启动链。
+
+写入前必须使用同机型、同固件和同一启动链的正常镜像作为签名来源，核对候选的签名算法、认证块、完整 vbmeta、GKI 签名、偏移及分区边界。应保留的签名区域须逐字节一致，候选须绑定完整镜像哈希；缺少匹配材料、算法退化为 `NONE` 或任一核验失败时，不得继续刷写。写后完整读回，再核对整个镜像及签名区域。
+
+Android 验收需包含本次故障涉及的实际操作。ADB 在线、进入桌面或绿色校验状态不能单独证明触摸、息屏唤醒及其它功能正常。
+
+## Android 触摸兼容与回归
+
+五代正常 runtime 使用 `tb323fu_unified_defconfig`，须保留 `CONFIG_KSHIM_TB323FU_ANDROID_TOUCH_4M8=y`。该配置将兼容处理纳入正常构建，避免依赖默认关闭的 CMake 试验开关。遗漏时 Android 可能触屏失效，并在息屏后亮屏时崩溃；签名核验通过不能排除这种交接回归。
+
+处理仅作用于实际 TB323FU 的原厂 Android DT：校验 NVT 节点后，就地将父 SPI 控制器频率从 19.2 MHz 调为 4.8 MHz，保持 DT 大小和其它数据，并在交接前清理缓存。不要套到其它板型或 Linux DT。
+
+重编后运行 `android_touch_profile_test` 与 `android_touch_spi_trial_test`，完成签名核验和写后完整读回，再复测 Android 点击、滑动、息屏后亮屏，以及 UFS 设置保存和“记住上次系统”。
+
 ## 选择构建路径
 
 | 场景 | 入口 |
@@ -27,7 +45,7 @@
 
 ## 依赖
 
-恢复固定版本的 CrDK、picolibc 和 LVGL，并应用源码内 `ports/crdk/` 补丁层。`lib/libfdt` 和 `libfdt_env.h` 需单独准备；仅初始化 `.gitmodules` 中的子模块并不足够。打包需要配套 MultiBootKernelPatcher/UnpackTool 和 `patches/boot/` 的本地变更，具体版本见来源文档。
+依赖恢复的完整步骤、固定版本、`libfdt_env.h` 适配与校验以[共享依赖准备指引](../kshim-success-source/DEPENDENCIES.md)为准：需要 CrDK、picolibc、LVGL 三个固定版本依赖（CrDK 必须保留带 `.git` 的独立仓库），并单独取回 `lib/libfdt`（含 `include/libfdt_env.h`）。`ports/crdk/` 补丁由 CMake 调用 `prepare.py` 校验并应用到构建目录副本，不要手工给原始依赖打补丁。仅初始化 `.gitmodules` 中的子模块并不足够。打包需要配套 MultiBootKernelPatcher/UnpackTool 和 `patches/boot/` 的本地变更，具体版本见来源文档。
 
 源码快照不包含顶层 `.git/`、`lib/` 和 `third_party/`。这不包括 `src/` 内同名的源码子目录，不能一并删除。
 

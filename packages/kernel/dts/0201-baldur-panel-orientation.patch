@@ -1,0 +1,21 @@
+diff --git a/arch/arm64/boot/dts/qcom/baldur-display.dtsi b/arch/arm64/boot/dts/qcom/baldur-display.dtsi
+--- a/arch/arm64/boot/dts/qcom/baldur-display.dtsi
++++ b/arch/arm64/boot/dts/qcom/baldur-display.dtsi
+@@ -28,16 +28,17 @@
+ 	qcom,sync-dual-dsi;
+ 	qcom,master-dsi;
+ 
+ 	status = "okay";
+ 
+ 	panel0: panel@0 {
+ 		compatible = "lenovo,baldur-csot-nt36523";
+ 		reg = <0>;
++		rotation = <270>;
+ 
+ 		/*
+ 		 * Reset is on a PMIC GPIO, not TLMM: pmh0110 at SPMI SID 5,
+ 		 * pin 10. The vendor reset sequence ends with the line high,
+ 		 * and the nt36523 driver ends its own reset at logical 0, so
+ 		 * the line is active low here.
+ 		 */
+ 		reset-gpios = <&pmh0110_f_e0_gpios 10 GPIO_ACTIVE_LOW>;

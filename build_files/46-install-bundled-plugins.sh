@@ -6,12 +6,17 @@ set -euxo pipefail
 # armada-decky-sync copies /usr/share/decky-plugins/* into the user's homebrew
 # tree.
 #
-# Public archive attachments are downloaded from the public GitHub releases;
-# private archive attachments ship inside the source tree as bundled assets.
-# Either way every archive is pinned by SHA-256 in
-# decky/bundled-plugins/plugins.lock.json. Each package already carries a
-# top-level directory named after the plugin, so its zip extracts straight into
-# /usr/share/decky-plugins without an extra nesting level.
+# decky/plugin-sources.json is the truth for these plugins. Every build start
+# resolves the newest release, branch-tip and in-tree source into
+# decky/bundled-plugins/plugins.lock.json, decky/bundled-plugins/assets and
+# decky/bundled-plugins/plugins.resolved.json. This step keeps no vendored or
+# private older package policy: it installs only those generated archives, and
+# only after validate_resolved_plugin_sources() re-checked the report, the lock
+# bytes, every generated archive and the versions 45 already installed.
+#
+# Each package already carries a top-level directory named after the plugin, so
+# its zip extracts straight into /usr/share/decky-plugins without an extra
+# nesting level.
 #
 # Only upstream release files (licenses included) are installed: no
 # subscriptions, personal configuration, commercial DLLs, or per-game configs.
@@ -21,43 +26,31 @@ trap 'rm -rf "${work}"' EXIT
 
 install -d -m 0755 /usr/share/decky-plugins
 
-PLUGIN_LOCK=/ctx/decky/bundled-plugins/plugins.lock.json \
 PLUGIN_DEST=/usr/share/decky-plugins \
 PLUGIN_WORK="${work}" \
 python3 - <<'PY'
 import hashlib
-import json
+import importlib.util
 import os
 import shutil
-import subprocess
 import zipfile
 
-LOCK = os.environ["PLUGIN_LOCK"]
+SOURCE = "/ctx"
+RESOLVER = os.path.join(SOURCE, "build_files", "resolve-plugin-sources.py")
 DEST = os.environ["PLUGIN_DEST"]
 WORK = os.environ["PLUGIN_WORK"]
 REQUIRED_FILES = ("plugin.json", "main.py", "dist/index.js")
 
 
-def fetch(url, path):
-    subprocess.run(
-        [
-            "curl",
-            "--fail",
-            "--location",
-            "--silent",
-            "--show-error",
-            "--connect-timeout",
-            "15",
-            "--max-time",
-            "300",
-            "--output",
-            path,
-            "--user-agent",
-            "armada-bundled-build",
-            url,
-        ],
-        check=True,
+def load_resolver():
+    spec = importlib.util.spec_from_file_location(
+        "armada_resolve_plugin_sources", RESOLVER
     )
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"cannot load the plugin resolver from {RESOLVER}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def sha256(path):
@@ -121,23 +114,34 @@ def ensure_executable(plugin_dir, wanted):
         print(f"marked executable: {path}")
 
 
-with open(LOCK, encoding="utf-8") as handle:
-    plugins = json.load(handle)
+resolve = load_resolver()
+
+# Without a resolution report there is nothing verified to install. The
+# validator names resolve-plugin-sources.py and the supported build entry, so a
+# direct build fails here instead of fetching a URL or reusing an older ZIP.
+try:
+    plugins = resolve.validate_resolved_plugin_sources(SOURCE, installed_root=DEST)
+except resolve.ResolveError as error:
+    raise SystemExit(f"resolved plugin validation failed: {error}")
 
 if not isinstance(plugins, list) or not plugins:
-    raise SystemExit(f"expected a non-empty array in {LOCK}")
+    raise SystemExit("the resolved plugin lock is empty")
 
 for plugin in plugins:
     name = plugin["name"]
     directory = plugin["directory"]
+    archive_rel = plugin.get("archive")
     archive_path = os.path.join(WORK, f"{directory}.zip")
 
     print(f"installing {name} {plugin['version']}")
-    if plugin.get("archive"):
-        shutil.copyfile(os.path.join("/ctx", plugin["archive"]), archive_path)
-        print(f"using bundled package: {plugin['archive']}")
-    else:
-        fetch(plugin["url"], archive_path)
+    if not archive_rel:
+        raise SystemExit(
+            f"{name} has no generated archive in the resolved lock; "
+            "run build_files/resolve-plugin-sources.py through the supported "
+            "build entry"
+        )
+    shutil.copyfile(os.path.join(SOURCE, archive_rel), archive_path)
+    print(f"using generated package: {archive_rel}")
 
     actual = sha256(archive_path)
     expected = plugin["sha256"].lower()
@@ -163,6 +167,8 @@ for plugin in plugins:
 print("bundled plugins installed")
 PY
 
-# Keep the resolved lock file in the image for traceability.
+# Keep the resolved lock and report in the image for traceability.
 install -Dpm 0644 /ctx/decky/bundled-plugins/plugins.lock.json \
     /usr/share/armada/bundled-plugins/plugins.lock.json
+install -Dpm 0644 /ctx/decky/bundled-plugins/plugins.resolved.json \
+    /usr/share/armada/bundled-plugins/plugins.resolved.json

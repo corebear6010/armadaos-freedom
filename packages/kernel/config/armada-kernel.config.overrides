@@ -292,7 +292,7 @@ CONFIG_SECURITY_SELINUX=y
 CONFIG_BPF_SYSCALL=y
 CONFIG_CGROUP_BPF=y
 
-# ============== SM8650 (AYANEO Pocket S2, KONKR Pocket FIT) ==============
+# ============== SM8650 (AYANEO Pocket S2, KONKR Pocket FIT, Lenovo TB710FU) ==============
 # No SM_DISPCC_8650: display clock is the combined dispcc-sm8550.c (=y above).
 CONFIG_SM_GCC_8650=y
 CONFIG_SM_GPUCC_8650=y
@@ -304,6 +304,9 @@ CONFIG_DRM_PANEL_AR14=y                     # KONKR Pocket FIT + Pocket FIT Elit
 CONFIG_TOUCHSCREEN_CHIPONE_TDDI=m           # KONKR Pocket FIT + Elite (ICNL9922C)
 CONFIG_TOUCHSCREEN_GOODIX=m                 # Pocket S2 + Pocket DS
 CONFIG_ATH12K=m                             # WCN7850/WCN7860 Wi-Fi (SM8650 + SM8750)
+CONFIG_DRM_PANEL_NOVATEK_NT36532=y          # TB710FU 3200x2000 dual-DSI DSC panel
+CONFIG_REGULATOR_AW37503=y                  # TB710FU panel bias, needed by the built-in panel
+CONFIG_TOUCHSCREEN_NT36532_SPI=m            # TB710FU touch and pen
 
 # ============== SM8250 handhelds ==============
 CONFIG_SM_GCC_8250=y

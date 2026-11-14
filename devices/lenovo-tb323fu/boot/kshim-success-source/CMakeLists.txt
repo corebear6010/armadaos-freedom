@@ -49,6 +49,7 @@ set(OUTPUT_NAME kShimC)
 set(KSHIMC_VERSION "0.0.1")
 project(${OUTPUT_NAME} C ASM)
 
+option(KSHIM_TB323FU_ANDROID_TOUCH_4M8_TRIAL "Trial only: limit original Android NVT controller to 4.8 MHz at handoff" OFF)
 option(KSHIM_STANDALONE "Boot directly as an ARM64 Image instead of an attached manifest runtime" OFF)
 option(KSHIM_DIAGNOSTIC_BASE_ONLY "Diagnostic only: hand off to the packed Linux base image before any DT/console/peripheral work; no menu and no peripheral probes; incompatible with KSHIM_STANDALONE" OFF)
 option(KSHIM_DIAGNOSTIC_RESOURCES_ONLY "Diagnostic only: probe DT/console/resources, then hand off to the packed Linux base image after quiescing the console; no menu and no post-checkpoint peripheral probes; incompatible with KSHIM_STANDALONE and KSHIM_DIAGNOSTIC_BASE_ONLY" OFF)
@@ -83,6 +84,7 @@ add_compile_definitions(KSHIM_STANDALONE=$<BOOL:${KSHIM_STANDALONE}>
     KSHIM_DIAGNOSTIC_RESOURCES_ONLY=$<BOOL:${KSHIM_DIAGNOSTIC_RESOURCES_ONLY}>
     KSHIM_DIAGNOSTIC_DT_ONLY=$<BOOL:${KSHIM_DIAGNOSTIC_DT_ONLY}>
     KSHIM_RAMOOPS_RECOVERY_ONLY=$<BOOL:${KSHIM_RAMOOPS_RECOVERY_ONLY}>
+    KSHIM_TB323FU_ANDROID_TOUCH_4M8_TRIAL=$<BOOL:${KSHIM_TB323FU_ANDROID_TOUCH_4M8_TRIAL}>
     KSHIM_LINK_ADDRESS=${KSHIM_LINK_ADDRESS} KSHIM_RUNTIME_SLOT_SIZE=${KSHIM_RUNTIME_SLOT_SIZE})
 
 # Generate common variables pass to Kconfig
@@ -137,7 +139,7 @@ set(__MB_CAPABLE OFF CACHE BOOL "" FORCE)
 set(TESTS OFF CACHE BOOL "" FORCE)
 add_subdirectory(${CMAKE_SOURCE_DIR}/lib/picolibc ${CMAKE_BINARY_DIR}/lib/picolibc)
 
-# Add compile flags for a freestanding environment 
+# Add compile flags for a freestanding environment
 
 # Add include directories
 set(INCLUDE_DIRS
@@ -151,13 +153,14 @@ include_directories(${INCLUDE_DIRS})
 
 # Define the executable target, including assembly and C source files
 set(SRC_FILES
+    src/dt/tb323fu_android_touch.c
     src/dt/memory_overlay.c
     src/dt/simplefb.c
     lib/libfdt/fdt_overlay.c
 
     src/core/main.c src/core/platform.c src/core/uefi_boot.c src/core/picoport.c src/core/boot_metrics.c
     src/core/menu_locale.c src/core/boot_settings.c
-    src/dt/dt.c src/dt/device_info.c src/dt/initrd.c src/dt/handoff.c src/dt/handoff_reservations.c src/dt/console.c src/dt/resources.c src/dt/probe.c
+    src/dt/dt.c src/dt/device_info.c src/dt/boot_witness.c src/dt/initrd.c src/dt/handoff.c src/dt/handoff_reservations.c src/dt/console.c src/dt/resources.c src/dt/probe.c
     src/dt/tb323fu_ramoops.c src/dt/tb323fu_ramoops_export.c
     src/drivers/console.c src/drivers/pl011.c src/drivers/keys.c src/drivers/qcom_reboot.c
     src/arch/arm64/exception.c src/arch/arm64/relocation.c src/arch/arm64/mmu.c
@@ -166,6 +169,34 @@ set(SRC_FILES
     src/arch/arm64/psci.S src/arch/arm64/timer.S src/arch/arm64/smc.S src/arch/arm64/gicv3.S
     lib/libfdt/fdt.c lib/libfdt/fdt_check.c lib/libfdt/fdt_ro.c lib/libfdt/fdt_addresses.c
     lib/libfdt/fdt_rw.c lib/libfdt/fdt_sw.c lib/libfdt/fdt_wip.c lib/libfdt/fdt_empty_tree.c lib/libfdt/fdt_strerror.c)
+
+if(CONFIG_KSHIM_STORAGE_ENTRY_PROBE OR CONFIG_KSHIM_UFS_NATIVE_IO)
+    list(APPEND SRC_FILES src/drivers/storage_probe.c src/drivers/storage_ufs_dma.c
+        src/dt/storage_probe_export.c
+        src/arch/arm64/storage_probe_io.c src/arch/arm64/storage_probe_load.S)
+    if(CONFIG_KSHIM_UFS_NATIVE_IO)
+        list(APPEND SRC_FILES src/arch/arm64/storage_ufs_native_io.c
+            src/arch/arm64/storage_ufs_store.S)
+        if(CONFIG_KSHIM_UFS_SETTINGS)
+            list(APPEND SRC_FILES src/arch/arm64/storage_settings_native.c
+                src/core/update_trial_boot.c
+                src/drivers/storage_ufs_settings.c src/dt/storage_settings_export.c)
+        endif()
+        if(CONFIG_KSHIM_UFS_READ_PROBE)
+            list(APPEND SRC_FILES src/arch/arm64/storage_ufs_read_native.c
+                src/drivers/storage_ufs_read_probe.c
+                src/dt/storage_ufs_read_export.c)
+            if(CONFIG_KSHIM_UFS_READ_SCREEN)
+                list(APPEND SRC_FILES src/ui/storage_ufs_read_screen.c
+                    src/arch/arm64/storage_ufs_read_screen.c)
+            endif()
+        endif()
+    endif()
+endif()
+# Storage formats are shared by the later hardware backends.
+list(APPEND SRC_FILES src/core/storage_block.c src/core/storage_ab.c src/core/storage_config.c src/core/update_trial.c src/core/update_trial_store.c
+    src/core/update_binding.c
+    src/core/storage_settings.c src/drivers/storage_ufs.c src/drivers/storage_sdhci.c)
 
 if(CONFIG_KSHIM_SMP)
     list(APPEND SRC_FILES src/arch/arm64/smp.c

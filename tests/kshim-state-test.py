@@ -78,6 +78,8 @@ class StateTest(unittest.TestCase):
         self.stock.write_bytes(padded(b"STOCK"))
         self.runtime = self.root / "runtime.bin"
         self.runtime.write_bytes(b"RUNTIME-BYTES")
+        self.avb_key = self.root / "testkey_rsa4096.pem"
+        self.avb_key.write_bytes(b"PRIVATE-KEY")
         self.current_image = self.root / "current.img"
         self.current_bytes = padded(b"CURRENT-INSTALLED")
         self.current_image.write_bytes(self.current_bytes)
@@ -167,7 +169,10 @@ class StateTest(unittest.TestCase):
         return {"path": str(path), "length": len(data), "sha256": sha(data)}
 
     def tool_meta(self, key):
-        return self.file_meta(self.tools / SYNC.TOOL_FILES[key])
+        path = (LIBEXEC / SYNC.SIGNER_FILE
+                if key == "avb_signer"
+                else self.tools / SYNC.TOOL_FILES[key])
+        return self.file_meta(path)
 
     def report_for(self, item, stock, runtime, image=None):
         boot = self.boot
@@ -190,6 +195,7 @@ class StateTest(unittest.TestCase):
                 "unpacker": self.tool_meta("unpacker"),
                 "repacker": self.tool_meta("repacker"),
                 "avbtool": self.tool_meta("avbtool"),
+                "avb_signer": self.tool_meta("avb_signer"),
             },
             "outputs": {"final_boot": {"path": "/historical/boot.img",
                                        "length": SMALL,
@@ -324,6 +330,7 @@ class StateTest(unittest.TestCase):
         values = {
             "--stock-boot": str(self.stock),
             "--runtime": str(self.runtime),
+            "--avb-key": str(self.avb_key),
             "--current-image": str(self.current_image),
             "--current-report": str(report),
             "--partuuid": PARTUUID,
@@ -351,16 +358,22 @@ class StateTest(unittest.TestCase):
     def test_provision_copies_private_inputs_without_touching_sources(self):
         stock_before = self.stock.read_bytes()
         runtime_before = self.runtime.read_bytes()
+        avb_key_before = self.avb_key.read_bytes()
         target_before = self.target.read_bytes()
         document = self.provisioned()
 
         self.assertEqual(self.stock.read_bytes(), stock_before)
         self.assertEqual(self.runtime.read_bytes(), runtime_before)
+        self.assertEqual(self.avb_key.read_bytes(), avb_key_before)
         self.assertEqual(self.target.read_bytes(), target_before)
         self.assertEqual(self.private("stock_boot").read_bytes(), stock_before)
         self.assertEqual(self.private("runtime").read_bytes(), runtime_before)
+        self.assertEqual(self.private("avb_key").read_bytes(), avb_key_before)
         self.assertEqual(sha(self.private("stock_boot").read_bytes()),
                          sha(stock_before))
+        self.assertEqual(
+            oct(self.private("avb_key").stat().st_mode & 0o777), "0o600"
+        )
 
         config = json.loads((self.state_dir / "config.json")
                             .read_text(encoding="utf-8"))
@@ -372,6 +385,12 @@ class StateTest(unittest.TestCase):
                          "inputs/stock-boot.img")
         self.assertEqual(config["inputs"]["runtime"]["path"],
                          "inputs/runtime.bin")
+        self.assertEqual(config["inputs"]["avb_key"]["path"],
+                         "inputs/testkey_rsa4096.pem")
+        self.assertEqual(config["inputs"]["avb_key"]["length"],
+                         len(avb_key_before))
+        self.assertEqual(config["inputs"]["avb_key"]["sha256"],
+                         sha(avb_key_before))
         self.assertEqual(document["schema"], 1)
         self.assertEqual(document["expected_current_sha256"],
                          sha(self.current_bytes))

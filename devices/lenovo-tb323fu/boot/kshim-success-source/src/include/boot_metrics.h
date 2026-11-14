@@ -39,6 +39,11 @@ int kshim_boot_metrics_export(void *Fdt);
 /* Weak implementation uses the existing millisecond counter on hardware;
  * host tests override this symbol with a deterministic clock. */
 uint64_t kshim_boot_metrics_now_ms(void);
+
+/* Records the early-MMU result so /chosen:kshim,mmu-early can report whether
+ * translation was already live on entry and how kshim_mmu_configure_early()
+ * ended.  Negative status values are exported as their two's complement. */
+void kshim_boot_metrics_set_mmu(uint32_t Enabled, int32_t Status);
 #else
 static inline void kshim_boot_metrics_record_once(kshim_boot_stage_t Stage)
 {
@@ -49,5 +54,11 @@ static inline int kshim_boot_metrics_export(void *Fdt)
 {
     (void)Fdt;
     return 0;
+}
+
+static inline void kshim_boot_metrics_set_mmu(uint32_t Enabled, int32_t Status)
+{
+    (void)Enabled;
+    (void)Status;
 }
 #endif

@@ -1,0 +1,60 @@
+# Minimal Ubuntu 24.04 build environment for build-edl-runtime.sh.
+# The runtime source is mounted at run time; no source is copied into the image.
+FROM ubuntu:24.04
+
+ARG DEBIAN_FRONTEND=noninteractive
+ENV LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8
+
+# binutils: on an arm64 host aarch64-linux-gnu-gcc is the native gcc and runs the
+# unprefixed as and ld, which only binutils provides (binutils-aarch64-linux-gnu
+# ships the prefixed tools). x86-64 hosts do not use it.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        coreutils \
+        findutils \
+        grep \
+        sed \
+        tar \
+        git \
+        cmake \
+        ninja-build \
+        gcc-aarch64-linux-gnu \
+        g++-aarch64-linux-gnu \
+        binutils-aarch64-linux-gnu \
+        binutils \
+        python3 \
+        python3-venv \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN python3 -m venv /opt/kconfig \
+    && /opt/kconfig/bin/pip install --no-cache-dir --disable-pip-version-check kconfiglib==14.1.0
+
+ENV PATH="/opt/kconfig/bin:${PATH}"
+
+RUN python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 12) else "Python 3.12 or newer is required")'
+
+RUN python3 -c 'import importlib.metadata as m; raise SystemExit(0 if m.version("kconfiglib") == "14.1.0" else "kconfiglib 14.1.0 is required")'
+
+RUN for tool in \
+        aarch64-linux-gnu-gcc \
+        aarch64-linux-gnu-g++ \
+        aarch64-linux-gnu-objcopy \
+        aarch64-linux-gnu-nm \
+        cmake \
+        ninja \
+        git \
+        genconfig \
+        sha256sum \
+        tar; do \
+        command -v "$tool" >/dev/null 2>&1 || { echo "missing required tool: $tool" >&2; exit 1; }; \
+    done
+
+# Compile and link a freestanding program, so a missing assembler or linker
+# fails here instead of in build-edl-runtime.sh.
+RUN printf 'void _start(void) { for (;;) ; }\n' > /tmp/smoke.c \
+    && aarch64-linux-gnu-gcc -ffreestanding -nostdlib -static -o /tmp/smoke /tmp/smoke.c \
+    && rm -f /tmp/smoke /tmp/smoke.c
+
+CMD ["bash"]

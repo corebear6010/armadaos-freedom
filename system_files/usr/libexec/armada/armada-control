@@ -44,6 +44,7 @@ BOTTOM_SCREEN_BRIGHTNESS_RESTORE_INTERVAL = 2
 BACKLIGHT_ROOT = Path("/sys/class/backlight")
 DRM_ROOT = Path("/sys/class/drm")
 DEVICE_ENV = os.environ.get("ARMADA_DEVICE_ENV", "/usr/libexec/armada/device-env")
+USB_NETWORK = "/usr/libexec/armada/usb-network"
 CONFIG_PATHS = {
     "power": Path("/etc/armada/power-profiles.conf"),
     "tweaks": Path("/etc/armada/game-tweaks.json"),
@@ -160,14 +161,15 @@ def get_desktop_mode() -> str:
     try:
         text = STEAMOS_MANAGER_STATE.read_text(encoding="utf-8")
     except OSError:
-        return "desktop"
+        return "mobile"
 
     match = re.search(r'(?m)^desktop_session\s*=\s*"([^"]*)"', text)
     session = match.group(1) if match else ""
     for mode, mode_session in DESKTOP_SESSION_FOR_MODE.items():
         if session == mode_session:
             return mode
-    return "desktop"
+    # Missing or raw upstream session state follows the Mobile default.
+    return "mobile"
 
 
 def set_desktop_mode(mode: str):
@@ -378,6 +380,24 @@ def action_get_mtp_enabled(request):
     return {"enabled": mtp_enabled()}
 
 
+def usb_network_state():
+    result = subprocess.check_output([USB_NETWORK, "state"], text=True, timeout=5)
+    state = dict(line.split("=", 1) for line in result.splitlines() if "=" in line)
+    return {"enabled": state.get("enabled") == "1", "supported": state.get("supported") == "1"}
+
+
+def action_get_usb_network_enabled(request):
+    return usb_network_state()
+
+
+def action_set_usb_network_enabled(request):
+    enabled = request.get("enabled")
+    if not isinstance(enabled, bool):
+        raise ValueError("invalid USB network enabled state")
+    run([USB_NETWORK, "set", "on" if enabled else "off"], timeout=30)
+    return usb_network_state()
+
+
 def available_sleep_modes():
     try:
         advertised = {
@@ -408,22 +428,37 @@ def action_set_sleep_mode(request):
     return {"value": value}
 
 
-def action_get_swipe_gestures_enabled(request):
+def read_swipe_gestures_config():
+    state = {"enabled": True, "in_game": True}
     try:
         lines = SWIPE_GESTURES_CONFIG.read_text(encoding="utf-8").splitlines()
     except (OSError, UnicodeDecodeError):
-        return {"enabled": True}
-    enabled = True
+        return state
     for line in lines:
-        match = re.fullmatch(r"\s*enabled\s*=\s*([01])\s*", line)
+        match = re.fullmatch(r"\s*(enabled|in_game)\s*=\s*([01])\s*", line)
         if match:
-            enabled = match.group(1) == "1"
-    return {"enabled": enabled}
+            state[match.group(1)] = match.group(2) == "1"
+    return state
 
 
-def gamescope_swipe_gestures(enabled):
+def write_swipe_gestures_config(state):
+    atomic_write(
+        SWIPE_GESTURES_CONFIG,
+        f"enabled={int(state['enabled'])}\nin_game={int(state['in_game'])}\n",
+    )
+
+
+def action_get_swipe_gestures_enabled(request):
+    return {"enabled": read_swipe_gestures_config()["enabled"]}
+
+
+def action_get_swipe_gestures_in_game_enabled(request):
+    return {"enabled": read_swipe_gestures_config()["in_game"]}
+
+
+def gamescope_swipe_gestures(enabled, convar="enable_touch_gestures"):
     # A valueless convar call resets it; use help to check support instead.
-    for args in (("help",), ("enable_touch_gestures", str(int(enabled)))):
+    for args in (("help",), (convar, str(int(enabled)))):
         result = subprocess.run(
             session_user_command(
                 "GAMESCOPE_WAYLAND_DISPLAY=gamescope-primary",
@@ -432,7 +467,7 @@ def gamescope_swipe_gestures(enabled):
             check=True, capture_output=True, text=True, timeout=5,
         )
         if args == ("help",) and not re.search(
-            r"\benable_touch_gestures:", result.stdout + result.stderr,
+            rf"\b{re.escape(convar)}:", result.stdout + result.stderr,
         ):
             raise RuntimeError("Gamescope does not support the swipe gesture setting")
 
@@ -441,15 +476,36 @@ def action_set_swipe_gestures_enabled(request):
     enabled = request.get("enabled")
     if not isinstance(enabled, bool):
         raise ValueError("invalid swipe gestures enabled state")
-    previous = action_get_swipe_gestures_enabled({})["enabled"]
+    state = read_swipe_gestures_config()
+    previous = state["enabled"]
     active = session_systemctl("is-active", "--quiet", GAME_MODE_SERVICE, check=False, timeout=5)
     if active.returncode == 0:
         gamescope_swipe_gestures(enabled)
+    state["enabled"] = enabled
     try:
-        atomic_write(SWIPE_GESTURES_CONFIG, f"enabled={int(enabled)}\n")
+        write_swipe_gestures_config(state)
     except Exception:
         if active.returncode == 0:
             gamescope_swipe_gestures(previous)
+        raise
+    return {"enabled": enabled}
+
+
+def action_set_swipe_gestures_in_game_enabled(request):
+    enabled = request.get("enabled")
+    if not isinstance(enabled, bool):
+        raise ValueError("invalid swipe gestures in-game enabled state")
+    state = read_swipe_gestures_config()
+    previous = state["in_game"]
+    active = session_systemctl("is-active", "--quiet", GAME_MODE_SERVICE, check=False, timeout=5)
+    if active.returncode == 0:
+        gamescope_swipe_gestures(enabled, "enable_touch_gestures_in_game")
+    state["in_game"] = enabled
+    try:
+        write_swipe_gestures_config(state)
+    except Exception:
+        if active.returncode == 0:
+            gamescope_swipe_gestures(previous, "enable_touch_gestures_in_game")
         raise
     return {"enabled": enabled}
 
@@ -824,6 +880,8 @@ def action_restart_game_mode(request):
 ACTIONS = {
     "get_swipe_gestures_enabled": action_get_swipe_gestures_enabled,
     "set_swipe_gestures_enabled": action_set_swipe_gestures_enabled,
+    "get_swipe_gestures_in_game_enabled": action_get_swipe_gestures_in_game_enabled,
+    "set_swipe_gestures_in_game_enabled": action_set_swipe_gestures_in_game_enabled,
     "suspend_swipe_gestures": action_suspend_swipe_gestures,
     "set_controller_type": action_set_controller_type,
     "get_controller_type": action_get_controller_type,
@@ -834,9 +892,11 @@ ACTIONS = {
     "set_rgb": action_set_rgb,
     "get_ssh_enabled": action_get_ssh_enabled,
     "get_mtp_enabled": action_get_mtp_enabled,
+    "get_usb_network_enabled": action_get_usb_network_enabled,
     "inputplumber_intercept": action_inputplumber_intercept,
     "set_ssh_enabled": action_set_ssh_enabled,
     "set_mtp_enabled": action_set_mtp_enabled,
+    "set_usb_network_enabled": action_set_usb_network_enabled,
     "set_bottom_screen_enabled": action_set_bottom_screen_enabled,
     "set_bottom_screen_brightness": action_set_bottom_screen_brightness,
     "get_desktop_mode": action_get_desktop_mode,

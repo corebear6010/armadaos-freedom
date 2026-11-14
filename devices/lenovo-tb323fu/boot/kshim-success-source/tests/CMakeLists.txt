@@ -209,6 +209,11 @@ target_compile_definitions(tb323fu_splash_test PRIVATE
 kshim_test(tb322fc_splash_test tb322fc_splash_test.c)
 target_link_libraries(tb322fc_splash_test PRIVATE kshim_dt)
 
+# TB710FU / SM8650 splash detection (measured register values); builds its
+# DT in-process with libfdt.
+kshim_test(tb710fu_splash_test tb710fu_splash_test.c)
+target_link_libraries(tb710fu_splash_test PRIVATE kshim_dt)
+
 # Parent index cache unit test: wrap fdt_parent_offset to observe cache hits.
 kshim_test(dt_parent_index_test parent_index_test.c)
 target_link_libraries(dt_parent_index_test PRIVATE kshim_dt)
@@ -291,6 +296,7 @@ kshim_test(boot_settings_test boot_settings_test.c
 # gate with the debug console forced off.
 kshim_test(platform_settings_menu_test platform_menu_test.c)
 target_compile_definitions(platform_settings_menu_test PRIVATE
+    CONFIG_KSHIM_UFS_SETTINGS=1
     CONFIG_KSHIM_MENU_SESSION_SETTINGS=1
     CONFIG_KSHIM_MENU_LANGUAGE_SWITCH=1
     CONFIG_KSHIM_MENU_ADVANCED_ACTIONS=1
@@ -368,6 +374,9 @@ target_link_libraries(boot_metrics_disabled_test PRIVATE kshim_dt)
 kshim_test(qcom_reboot_test qcom_reboot_test.c "${KSHIM_ROOT}/src/drivers/qcom_reboot.c")
 target_compile_definitions(qcom_reboot_test PRIVATE CONFIG_KSHIM_QCOM_REBOOT=1)
 target_link_libraries(qcom_reboot_test PRIVATE kshim_dt crdk_spmi)
+kshim_test(qcom_reboot_sdi_test qcom_reboot_test.c "${KSHIM_ROOT}/src/drivers/qcom_reboot.c")
+target_compile_definitions(qcom_reboot_sdi_test PRIVATE CONFIG_KSHIM_QCOM_REBOOT=1 CONFIG_KSHIM_EDL_DISABLE_SDI=1)
+target_link_libraries(qcom_reboot_sdi_test PRIVATE kshim_dt crdk_spmi)
 kshim_test(platform_advanced_menu_test platform_menu_test.c)
 target_compile_definitions(platform_advanced_menu_test PRIVATE CONFIG_KSHIM_MENU_ADVANCED_ACTIONS=1 CONFIG_KSHIM_QCOM_REBOOT=1 CONFIG_KSHIM_MENU_CHINESE=1)
 target_include_directories(platform_advanced_menu_test BEFORE PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include" "${KSHIM_ROOT}/lib/libfdt/include")
@@ -408,3 +417,91 @@ target_compile_definitions(console_disabled_test PRIVATE
 target_include_directories(console_disabled_test BEFORE PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/include" "${KSHIM_ROOT}/lib/libfdt/include")
 target_link_libraries(console_disabled_test PRIVATE crdk)
+
+kshim_test(storage_block_test storage_block_test.c "${KSHIM_ROOT}/src/core/storage_block.c")
+kshim_test(storage_ab_test storage_ab_test.c "${KSHIM_ROOT}/src/core/storage_ab.c"
+    "${KSHIM_ROOT}/src/core/storage_block.c")
+kshim_test(storage_config_test storage_config_test.c "${KSHIM_ROOT}/src/core/storage_block.c"
+    "${KSHIM_ROOT}/src/core/storage_config.c")
+kshim_test(storage_probe_test storage_probe_test.c "${KSHIM_ROOT}/src/drivers/storage_probe.c")
+kshim_test(storage_probe_io_test storage_probe_io_test.c "${KSHIM_ROOT}/src/arch/arm64/storage_probe_io.c")
+target_compile_definitions(storage_probe_io_test PRIVATE CONFIG_KSHIM_UFS_NATIVE_IO=1)
+kshim_test(storage_probe_export_test storage_probe_export_test.c "${KSHIM_ROOT}/src/dt/storage_probe_export.c")
+target_link_libraries(storage_probe_export_test PRIVATE kshim_dt)
+kshim_test(storage_ufs_test storage_ufs_test.c "${KSHIM_ROOT}/src/drivers/storage_ufs.c"
+    "${KSHIM_ROOT}/src/core/storage_block.c")
+# Inherited-HIBERN8 handoff regression: fake MMIO hardware around the real
+# transport, so the opt-in manage_link contract is exercised end to end
+# without any LVGL dependency.
+kshim_test(storage_ufs_link_test storage_ufs_link_test.c
+    "${KSHIM_ROOT}/src/drivers/storage_ufs.c"
+    "${KSHIM_ROOT}/src/core/storage_block.c")
+# Opt-in UFS device power preparation: fake MMIO/DMA around the real transport,
+# so prepare/wake/verify/restore is exercised end to end without a stub API.
+kshim_test(storage_ufs_power_test storage_ufs_power_test.c
+    "${KSHIM_ROOT}/src/drivers/storage_ufs.c"
+    "${KSHIM_ROOT}/src/core/storage_block.c")
+# Bounded read-only UFS diagnostic sequence: the generic claim/nop/open_lun/
+# release transport is stubbed by the test, while the real storage_block.c
+# supplies the header/tail CRC. GPT lookup and block reads are wrapped so the
+# suite can inject partitions, payloads and failures without a virtual disk.
+kshim_test(storage_ufs_read_probe_test storage_ufs_read_probe_test.c
+    "${KSHIM_ROOT}/src/drivers/storage_ufs_read_probe.c"
+    "${KSHIM_ROOT}/src/core/storage_block.c")
+target_link_options(storage_ufs_read_probe_test PRIVATE
+    -Wl,--wrap=kshim_gpt_find_backup -Wl,--wrap=kshim_block_read)
+kshim_test(storage_ufs_read_power_probe_test storage_ufs_read_probe_test.c
+    "${KSHIM_ROOT}/src/drivers/storage_ufs_read_probe.c"
+    "${KSHIM_ROOT}/src/core/storage_block.c")
+target_compile_definitions(storage_ufs_read_power_probe_test PRIVATE CONFIG_KSHIM_UFS_DEVICE_WAKE=1)
+target_link_options(storage_ufs_read_power_probe_test PRIVATE
+    -Wl,--wrap=kshim_gpt_find_backup -Wl,--wrap=kshim_block_read)
+kshim_test(storage_ufs_read_export_test storage_ufs_read_export_test.c
+    "${KSHIM_ROOT}/src/dt/storage_ufs_read_export.c")
+target_link_libraries(storage_ufs_read_export_test PRIVATE kshim_dt)
+# Early UFS diagnostic screen: the pure renderer only, on real framebuffer
+# memory with guard bytes. It never links the storage transport.
+kshim_test(storage_ufs_read_screen_test storage_ufs_read_screen_test.c
+    "${KSHIM_ROOT}/src/ui/storage_ufs_read_screen.c"
+    "${KSHIM_ROOT}/src/ui/framebuffer.c")
+kshim_test(storage_sdhci_test storage_sdhci_test.c "${KSHIM_ROOT}/src/drivers/storage_sdhci.c"
+    "${KSHIM_ROOT}/src/core/storage_block.c")
+kshim_test(storage_ufs_dma_test storage_ufs_dma_test.c
+    "${KSHIM_ROOT}/src/drivers/storage_ufs_dma.c")
+kshim_test(storage_settings_test storage_settings_test.c "${KSHIM_ROOT}/src/core/storage_settings.c"
+    "${KSHIM_ROOT}/src/core/storage_block.c" "${KSHIM_ROOT}/src/core/storage_config.c")
+# The real menu persistence path shares the production settings and block layers.
+foreach(target platform_menu_test platform_menu_no_power_test platform_menu_console_off_test
+        platform_settings_menu_test platform_settings_console_off_test platform_advanced_menu_test
+        platform_language_menu_test)
+    target_sources(${target} PRIVATE "${KSHIM_ROOT}/src/core/storage_settings.c"
+        "${KSHIM_ROOT}/src/core/storage_config.c" "${KSHIM_ROOT}/src/core/storage_block.c")
+endforeach()
+
+kshim_test(update_trial_test update_trial_test.c "${KSHIM_ROOT}/src/core/update_trial.c" "${KSHIM_ROOT}/src/core/storage_block.c")
+kshim_test(update_trial_policy_test update_trial_policy_test.c "${KSHIM_ROOT}/src/core/update_trial.c" "${KSHIM_ROOT}/src/core/storage_block.c")
+kshim_test(update_trial_store_test update_trial_store_test.c "${KSHIM_ROOT}/src/core/update_trial.c" "${KSHIM_ROOT}/src/core/storage_block.c" "${KSHIM_ROOT}/src/core/storage_config.c" "${KSHIM_ROOT}/src/core/update_trial_store.c")
+kshim_test(update_binding_test update_binding_test.c "${KSHIM_ROOT}/src/core/update_binding.c")
+kshim_test(update_trial_boot_test update_trial_boot_test.c "${KSHIM_ROOT}/src/core/update_trial_boot.c" "${KSHIM_ROOT}/src/core/update_binding.c" "${KSHIM_ROOT}/src/core/update_trial.c" "${KSHIM_ROOT}/src/core/storage_block.c")
+kshim_test(storage_ufs_settings_test storage_ufs_settings_test.c
+    "${KSHIM_ROOT}/src/core/storage_settings.c"
+    "${KSHIM_ROOT}/src/core/storage_config.c" "${KSHIM_ROOT}/src/core/storage_block.c"
+    "${KSHIM_ROOT}/src/core/update_trial.c" "${KSHIM_ROOT}/src/core/update_trial_store.c")
+
+target_sources(storage_ufs_settings_test PRIVATE "${KSHIM_ROOT}/src/drivers/storage_ufs_settings.c")
+
+kshim_test(storage_settings_export_test storage_settings_export_test.c)
+target_link_libraries(storage_settings_export_test PRIVATE kshim_dt)
+
+target_sources(storage_settings_export_test PRIVATE "${KSHIM_ROOT}/src/dt/storage_settings_export.c")
+
+kshim_test(storage_settings_native_test storage_settings_native_test.c
+    "${KSHIM_ROOT}/src/arch/arm64/storage_settings_native.c")
+target_compile_definitions(storage_settings_native_test PRIVATE CONFIG_KSHIM_SETTINGS_SAVE_TEST=1)
+
+kshim_test(android_touch_spi_trial_test android_touch_spi_trial_test.c
+    "${KSHIM_ROOT}/src/dt/tb323fu_android_touch.c")
+target_link_libraries(android_touch_spi_trial_test PRIVATE kshim_dt)
+add_test(NAME android_touch_profile_test
+    COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/android_touch_profile_test.py"
+        --cc "${CMAKE_C_COMPILER}" --crdk-include "${CRDK_ROOT}/Include")

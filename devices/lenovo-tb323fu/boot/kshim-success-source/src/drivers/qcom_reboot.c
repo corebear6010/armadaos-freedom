@@ -19,6 +19,7 @@
 #define SCM_INFO UINT32_C(0xc2000601)
 #define SCM_IO_READ UINT32_C(0xc2000501)
 #define SCM_IO_WRITE UINT32_C(0xc2000502)
+#define SCM_DISABLE_SDI UINT32_C(0xc2000109)
 #define SCM_OEM_REBOOT UINT32_C(0xc3000922)
 #define PSCI_RESET2 UINT32_C(0xc4000012)
 
@@ -51,7 +52,9 @@ int kshim_qcom_reboot_parse(const void *fdt,
     if (fdt_node_check_compatible(fdt, 0, "qcom,canoep") &&
         fdt_node_check_compatible(fdt, 0, "lenovo,tb323fu") &&
         fdt_node_check_compatible(fdt, 0, "lenovo,baldur") &&
-        fdt_node_check_compatible(fdt, 0, "qcom,sunp"))
+        fdt_node_check_compatible(fdt, 0, "qcom,sunp") &&
+        /* TB710FU (SM8650): same SCM dload + SDAM restart_reason DT ABI. */
+        fdt_node_check_compatible(fdt, 0, "qcom,pineapple"))
         return KSHIM_QCOM_REBOOT_UNSUPPORTED;
 
     int scm = unique_compatible(fdt, "qcom,scm");
@@ -162,6 +165,40 @@ static int dload_read(const struct kshim_qcom_reboot_config *c, uint32_t *value)
 static int dload_write(const struct kshim_qcom_reboot_config *c, uint32_t value)
 {
     return scm_call(SCM_IO_WRITE, 2, c->dload_address, value, NULL);
+}
+
+int kshim_qcom_reboot_probe_edl(const void *fdt,
+                               struct kshim_qcom_edl_probe *p)
+{
+    struct kshim_qcom_reboot_config c;
+    if (!p) return KSHIM_QCOM_REBOOT_INVALID_DT;
+    memset(p, 0, sizeof(*p));
+    p->reset2_status = -1;
+    p->oem_status = KSHIM_QCOM_REBOOT_UNSUPPORTED;
+    p->status = kshim_qcom_reboot_parse(fdt, &c);
+    if (p->status) return p->status;
+    p->dload_address = c.dload_address;
+    p->status = KSHIM_QCOM_REBOOT_UNSUPPORTED;
+    if (kshim_psci_init(fdt) || kshim_psci_conduit() != KSHIM_PSCI_CONDUIT_SMC)
+        return p->status;
+    /* Same availability IDs and priority as request(); queries and IO_READ
+     * only. In particular, do not invoke a reset just to discover support. */
+    const uint32_t ids[] = {0x02000601, 0x02000501, 0x02000502};
+    for (unsigned i = 0; i < 3; ++i)
+        if (scm_available(ids[i])) p->scm_available_mask |= 1U << i;
+    if (p->scm_available_mask != 7) return p->status;
+    p->psci_version = kshim_psci_version();
+    if (p->psci_version >= UINT32_C(0x10001))
+        p->reset2_status = (int32_t)kshim_psci_features(PSCI_RESET2);
+    p->oem_status = scm_call(SCM_INFO, 1, UINT32_C(0x03000922), 0,
+                             &p->oem_available);
+    uint32_t route = !p->oem_status && p->oem_available == 1 ?
+        KSHIM_QCOM_EDL_ROUTE_OEM : p->reset2_status == 0 ?
+        KSHIM_QCOM_EDL_ROUTE_PSCI_RESET2 : KSHIM_QCOM_EDL_ROUTE_NONE;
+    if (!route) return p->status;
+    p->status = dload_read(&c, &p->dload_value);
+    if (!p->status) p->route = route;
+    return p->status;
 }
 
 /* A separate adapter leaves the key-input adapter's read-only contract intact.
@@ -332,6 +369,12 @@ int kshim_qcom_reboot_request(const void *fdt, enum kshim_qcom_reboot_target tar
                            kshim_psci_features(PSCI_RESET2) != 0))
             return KSHIM_QCOM_REBOOT_UNSUPPORTED;
     }
+#if CONFIG_KSHIM_EDL_DISABLE_SDI
+    /* Check service availability before changing the download cookie. */
+    if (target == KSHIM_QCOM_REBOOT_EDL &&
+        !scm_available(UINT32_C(0x02000109)))
+        return KSHIM_QCOM_REBOOT_UNSUPPORTED;
+#endif
     if (dload_read(&c, &old_dload)) return KSHIM_QCOM_REBOOT_IO_FAILED;
     if (target != KSHIM_QCOM_REBOOT_EDL &&
         (kshim_qcom_reboot_spmi_prepare(&c) ||
@@ -357,6 +400,13 @@ int kshim_qcom_reboot_request(const void *fdt, enum kshim_qcom_reboot_target tar
         if (kshim_qcom_reboot_spmi_read(&c, &actual_reason) || actual_reason != desired)
             goto rollback;
     }
+#if CONFIG_KSHIM_EDL_DISABLE_SDI
+    if (target == KSHIM_QCOM_REBOOT_EDL) {
+        /* Disable watchdog debug (1) and SDI (0) before warm reset. */
+        error = scm_call(SCM_DISABLE_SDI, 2, 1, 0, NULL);
+        if (error) goto rollback;
+    }
+#endif
     barrier();
     if (target == KSHIM_QCOM_REBOOT_EDL) {
         if (oem_reset)
@@ -383,6 +433,17 @@ rollback:
 }
 
 #else
+int kshim_qcom_reboot_probe_edl(const void *fdt,
+                               struct kshim_qcom_edl_probe *p)
+{
+    (void)fdt;
+    if (!p) return KSHIM_QCOM_REBOOT_INVALID_DT;
+    *p = (struct kshim_qcom_edl_probe){
+        .status = KSHIM_QCOM_REBOOT_UNSUPPORTED, .reset2_status = -1,
+        .oem_status = KSHIM_QCOM_REBOOT_UNSUPPORTED,
+    };
+    return p->status;
+}
 int kshim_qcom_reboot_parse(const void *fdt, struct kshim_qcom_reboot_config *config)
 {
     (void)fdt; (void)config;

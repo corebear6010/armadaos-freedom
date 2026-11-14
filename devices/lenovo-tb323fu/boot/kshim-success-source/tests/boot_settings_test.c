@@ -40,7 +40,7 @@ static void test_defaults(void)
 /* A valid record stays untouched by every read-only helper. */
 static void test_valid_record_unchanged(void)
 {
-    struct boot_settings settings = { BOOT_DEVICE_TB322FC, BOOT_TARGET_TF };
+    struct boot_settings settings = { BOOT_DEVICE_TB322FC, BOOT_TARGET_TF, 0};
     const enum boot_default_target available[] = {
         BOOT_TARGET_ANDROID, BOOT_TARGET_INTERNAL, BOOT_TARGET_TF,
     };
@@ -106,7 +106,7 @@ static void test_effective_board(void)
  * NULL is rejected. */
 static void test_validate_rejects_out_of_range(void)
 {
-    struct boot_settings valid = { BOOT_DEVICE_TB322FC, BOOT_TARGET_TF };
+    struct boot_settings valid = { BOOT_DEVICE_TB322FC, BOOT_TARGET_TF, 0};
     struct boot_settings bad;
 
     assert(boot_settings_validate(NULL) == BOOT_SETTINGS_INVALID);
@@ -120,7 +120,7 @@ static void test_validate_rejects_out_of_range(void)
     bad = valid;
     bad.default_target = (enum boot_default_target)-1;
     assert(boot_settings_validate(&bad) == BOOT_SETTINGS_INVALID);
-    bad.default_target = (enum boot_default_target)4;
+    bad.default_target = (enum boot_default_target)5;
     assert(boot_settings_validate(&bad) == BOOT_SETTINGS_INVALID);
 
     bad = valid;
@@ -216,7 +216,7 @@ static void test_resolve_boundaries(void)
 {
     struct boot_settings settings;
     struct boot_settings invalid_record = { (enum boot_device_choice)9,
-                                            BOOT_TARGET_ANDROID };
+                                            BOOT_TARGET_ANDROID, 0};
     const enum boot_default_target available[] = {
         BOOT_TARGET_ANDROID, BOOT_TARGET_INTERNAL, BOOT_TARGET_TF,
     };
@@ -299,8 +299,29 @@ static void test_resolve_boundaries(void)
     assert(boot_settings_init(NULL) == BOOT_SETTINGS_INVALID);
 }
 
+static void test_last_boot_mode(void)
+{
+    struct boot_settings settings;
+    assert(boot_settings_init(&settings)==0);
+    settings.default_target=BOOT_TARGET_LAST;
+    assert(boot_settings_validate(&settings)==BOOT_SETTINGS_OK);
+    const enum boot_default_target available[]={BOOT_TARGET_ANDROID,BOOT_TARGET_INTERNAL,BOOT_TARGET_TF};
+    size_t selected=99;
+    assert(boot_settings_resolve_default(&settings,available,3,1,&selected)==0 && selected==1);
+    for (unsigned target=1;target<=3;++target) {
+        settings.last_target=(enum boot_default_target)target;
+        assert(boot_settings_resolve_default(&settings,available,3,0,&selected)==0 && selected==target-1);
+    }
+    settings.last_target=BOOT_TARGET_INTERNAL;selected=99;
+    assert(boot_settings_resolve_default(&settings,available,1,0,&selected)==BOOT_SETTINGS_NEEDS_SELECTION && selected==99);
+    settings.default_target=BOOT_TARGET_ANDROID;
+    assert(boot_settings_resolve_default(&settings,available,3,1,&selected)==0 && selected==0);
+    settings.last_target=BOOT_TARGET_LAST;
+    assert(boot_settings_validate(&settings)==BOOT_SETTINGS_INVALID);
+}
 int main(void)
 {
+    test_last_boot_mode();
     test_defaults();
     test_valid_record_unchanged();
     test_effective_board();

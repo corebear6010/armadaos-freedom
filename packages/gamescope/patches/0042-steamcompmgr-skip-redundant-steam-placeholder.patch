@@ -1,0 +1,195 @@
+--- a/src/steamcompmgr.cpp
++++ b/src/steamcompmgr.cpp
+@@ -3418,12 +3418,15 @@
+ 	// Leave room for the layers painted after these, so an underlay and a pile of helper windows
+ 	// cannot push out the Steam overlay or the cursor. The mura plane is not reserved and yields
+ 	// when the frame is full.
++	const bool bHasExternalOverlay = externalOverlay && externalOverlay->opacity && cv_paint_external_overlay_plane;
++	// An existing external overlay makes the transparent Steam placeholder redundant.
++	const bool bNeedsSteamOverlayPlaceholder = !GetBackend()->UsesVulkanSwapchain() &&
++		GetBackend()->IsSessionBased() && !bHasExternalOverlay;
+ 	int nReservedLayers = 1; // cursor
+-	if ( externalOverlay && externalOverlay->opacity && cv_paint_external_overlay_plane )
++	if ( bHasExternalOverlay )
+ 		nReservedLayers++;
+ 	if ( cv_paint_steam_overlay_plane &&
+-		 ( ( overlay && overlay->opacity ) ||
+-		   ( !GetBackend()->UsesVulkanSwapchain() && GetBackend()->IsSessionBased() ) ) )
++		 ( ( overlay && overlay->opacity ) || bNeedsSteamOverlayPlaceholder ) )
+ 		nReservedLayers++;
+ 	if ( notification && notification->opacity )
+ 		nReservedLayers++;
+@@ -3481,7 +3484,7 @@
+ 			if ( overlay == pFocus->inputFocusWindow && pFocus == GetCurrentMouseFocus() )
+ 				update_touch_scaling( &frameInfo );
+ 		}
+-		else if ( !GetBackend()->UsesVulkanSwapchain() && GetBackend()->IsSessionBased() )
++		else if ( bNeedsSteamOverlayPlaceholder )
+ 		{
+ 			auto tex = vulkan_get_hacky_blank_texture();
+ 			if ( tex != nullptr && frameInfo.layers.count() < k_nMaxLayers )
+--- /dev/null
++++ b/tests/test_steam_overlay_placeholder.py
+@@ -0,0 +1,162 @@
++"""Exercise paint_all's actual reservation and Steam overlay blocks.
++
++Compile the extracted production blocks against drawing stubs, following the
++existing refresh-handler test. This checks layer decisions, not DRM hardware.
++TMPDIR selects the location of temporary C++ artifacts.
++"""
++
++import os
++from pathlib import Path
++import subprocess
++import tempfile
++import unittest
++
++
++SOURCE = Path(__file__).resolve().parents[1] / "src" / "steamcompmgr.cpp"
++
++
++def production_blocks():
++    source = SOURCE.read_text()
++    paint = source[source.index("paint_all( global_focus_t"):]
++    reserve_start = paint.index("\t// Leave room for the layers painted after these")
++    reserve_end = paint.index("\n\tif ( w && !w->isSteamStreamingClient", reserve_start)
++    draw_start = paint.index("\tif ( cv_paint_steam_overlay_plane )\n")
++    opening = paint.index("{", draw_start)
++    depth = 1
++    end = opening + 1
++    while depth:
++        depth += (paint[end] == "{") - (paint[end] == "}")
++        end += 1
++    return paint[reserve_start:reserve_end], paint[draw_start:end]
++
++
++HARNESS = r"""
++#include <cassert>
++#include <cstdlib>
++#include <iostream>
++struct Window { int opacity = 1; };
++struct Focus { Window *inputFocusWindow; void *cursor = nullptr; };
++struct Backend {
++    bool swapchain, session;
++    bool UsesVulkanSwapchain() { return swapchain; }
++    bool IsSessionBased() { return session; }
++} backend;
++Backend *GetBackend() { return &backend; }
++Focus *focus;
++Focus *GetCurrentMouseFocus() { return focus; }
++struct Texture { int width() { return 1920; } int height() { return 1080; } } texture;
++bool hasTexture;
++Texture *vulkan_get_hacky_blank_texture() { return hasTexture ? &texture : nullptr; }
++constexpr int k_nMaxLayers = 8, g_nOutputWidth = 3040, g_nOutputHeight = 1904;
++constexpr int g_zposOverlay = 3, ALPHA_BLENDING_MODE_COVERAGE = 1;
++constexpr int ALPHA_BLENDING_MODE_PREMULTIPLIED = 0, GAMESCOPE_APP_TEXTURE_COLORSPACE_LINEAR = 0;
++namespace PaintWindowFlag { enum { DrawBorders = 1, NoFilter = 2, CoverageMode = 4 }; }
++enum class GamescopeUpscaleFilter { NEAREST };
++struct { struct { bool enabled = true; } pending; } g_ColorMgmt;
++struct FrameInfo_t {
++    struct Layer_t {
++        struct Vec { float x{}, y{}; } scale, offset;
++        float opacity{};
++        int zpos{}, eAlphaBlendingMode{}, colorspace{};
++        bool applyColorMgmt{}, blackBorder{};
++        void *hdr_metadata_blob{}, *ctm{};
++        Texture *tex{};
++        GamescopeUpscaleFilter filter{};
++    };
++    struct Layers {
++        int used;
++        Layer_t data[k_nMaxLayers]{};
++        int count() { return used; }
++        Layer_t *push() { assert(used < k_nMaxLayers); return &data[used++]; }
++    } layers;
++};
++int painted = 0, touched = 0;
++void paint_window(Focus *, Window *, Window *, FrameInfo_t *, void *, int) { ++painted; }
++void update_touch_scaling(FrameInfo_t *) { ++touched; }
++int main(int argc, char **argv) {
++    assert(argc == 10);
++    int ext = std::atoi(argv[1]), steam = std::atoi(argv[2]);
++    Window externalWindow{ext}, steamWindow{steam};
++    Window *externalOverlay = ext < 0 ? nullptr : &externalWindow;
++    Window *overlay = steam < 0 ? nullptr : &steamWindow;
++    Window *notification = nullptr;
++    bool cv_paint_external_overlay_plane = std::atoi(argv[3]);
++    bool cv_paint_steam_overlay_plane = std::atoi(argv[4]);
++    bool cv_overlay_unmultiplied_alpha = false;
++    backend = {bool(std::atoi(argv[5])), bool(std::atoi(argv[6]))};
++    hasTexture = std::atoi(argv[7]);
++    int initialLayers = std::atoi(argv[8]);
++    bool inputFocused = std::atoi(argv[9]);
++    FrameInfo_t frameInfo{{initialLayers}};
++    Focus currentFocus{inputFocused ? overlay : nullptr};
++    Focus *pFocus = &currentFocus;
++    focus = pFocus;
++    // RESERVATION_BLOCK
++    // DRAW_BLOCK
++    std::cout << nReservedLayers << ' ' << frameInfo.layers.count() - initialLayers
++              << ' ' << painted << ' ' << touched << '\n';
++}
++"""
++
++
++class OverlayPlaceholderTest(unittest.TestCase):
++    @classmethod
++    def setUpClass(cls):
++        cls.temp = tempfile.TemporaryDirectory(prefix="steam-overlay-")
++        cls.addClassCleanup(cls.temp.cleanup)
++        reserve, draw = production_blocks()
++        source = HARNESS.replace("// RESERVATION_BLOCK", reserve).replace("// DRAW_BLOCK", draw)
++        cpp = Path(cls.temp.name) / "overlay.cpp"
++        cls.binary = Path(cls.temp.name) / "overlay-test"
++        cpp.write_text(source)
++        subprocess.run([os.environ.get("CXX", "c++"), "-std=c++20", "-O0",
++                        str(cpp), "-o", str(cls.binary)], check=True)
++
++    def check_scene(self, expected, ext=-1, steam=-1, external_enabled=1,
++                    steam_enabled=1, swapchain=0, session=1, texture=1,
++                    layers=1, input_focused=0):
++        args = (ext, steam, external_enabled, steam_enabled, swapchain,
++                session, texture, layers, input_focused)
++        result = subprocess.run([str(self.binary), *map(str, args)],
++                                check=True, capture_output=True, text=True)
++        self.assertEqual(tuple(map(int, result.stdout.split())), expected)
++
++    def test_visible_hud_does_not_add_a_blank_third_layer(self):
++        self.check_scene((2, 0, 0, 0), ext=1, layers=2)
++
++    def test_hidden_steam_window_with_hud_does_not_add_blank(self):
++        self.check_scene((2, 0, 0, 0), ext=1, steam=0, layers=2)
++
++    def test_no_hud_preserves_placeholder(self):
++        self.check_scene((2, 1, 0, 0))
++
++    def test_hidden_hud_preserves_placeholder(self):
++        self.check_scene((2, 1, 0, 0), ext=0)
++
++    def test_disabled_hud_preserves_placeholder(self):
++        self.check_scene((2, 1, 0, 0), ext=1, external_enabled=0)
++
++    def test_real_menu_with_hud_is_drawn_and_touch_is_updated(self):
++        self.check_scene((3, 0, 1, 1), ext=1, steam=1, layers=2, input_focused=1)
++
++    def test_real_menu_without_hud_is_drawn(self):
++        self.check_scene((2, 0, 1, 0), steam=1)
++
++    def test_disabled_steam_plane_stays_disabled(self):
++        self.check_scene((2, 0, 0, 0), ext=1, steam=1, steam_enabled=0, layers=2)
++
++    def test_nested_backend_does_not_get_a_placeholder(self):
++        self.check_scene((1, 0, 0, 0), swapchain=1)
++
++    def test_non_session_backend_does_not_get_a_placeholder(self):
++        self.check_scene((1, 0, 0, 0), session=0)
++
++    def test_missing_texture_does_not_push_a_layer(self):
++        self.check_scene((2, 0, 0, 0), texture=0)
++
++    def test_full_layer_array_does_not_overflow(self):
++        self.check_scene((2, 0, 0, 0), layers=8)
++
++
++if __name__ == "__main__":
++    unittest.main()

@@ -1,0 +1,11 @@
+# TB323FU vendor NVT exposes a virtual input node, without a SPI parent.
+# Gamescope cannot associate this node with the internal panel; supply its
+# landscape-right calibration here. Real SPI child devices must not match.
+ACTION!="add|change", GOTO="armada_tb323fu_virtual_touch_end"
+SUBSYSTEM!="input", GOTO="armada_tb323fu_virtual_touch_end"
+KERNEL!="event*", GOTO="armada_tb323fu_virtual_touch_end"
+DEVPATH!="/devices/virtual/input/input*/event*", GOTO="armada_tb323fu_virtual_touch_end"
+ATTRS{name}!="NVTCapacitiveTouchScreen", GOTO="armada_tb323fu_virtual_touch_end"
+ATTRS{id/bustype}!="001c", GOTO="armada_tb323fu_virtual_touch_end"
+PROGRAM=="/usr/bin/grep -azFxq lenovo,baldur /sys/firmware/devicetree/base/compatible", ENV{LIBINPUT_CALIBRATION_MATRIX}="0 1 0 -1 0 1"
+LABEL="armada_tb323fu_virtual_touch_end"

@@ -1,0 +1,11 @@
+#!/bin/sh
+set -eu
+
+config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/zbtop"
+
+if [ ! -f "$config_dir/btop.conf" ]; then
+	mkdir -p "$config_dir"
+	cp /usr/share/zbtop/btop.conf "$config_dir/btop.conf"
+fi
+
+exec /usr/libexec/armada/btop-cn --config "$config_dir/btop.conf" "$@"

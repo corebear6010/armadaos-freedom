@@ -1,0 +1,158 @@
+{
+  "schemaVersion": 1,
+  "runtimeSource": "devices/lenovo-tb323fu/boot/kshim-success-source",
+  "profiles": {
+    "TB322FC": {
+      "displayName": "Lenovo Legion Y700 Gen 4",
+      "compatible": {
+        "soc": "SM8750",
+        "device": "elden"
+      },
+      "dtb": "qcom/sm8750-lenovo-elden.dtb",
+      "required": [
+        "lenovo,elden",
+        "qcom,sm8750"
+      ],
+      "forbidden": [
+        "lenovo,baldur",
+        "lenovo,tb323fu",
+        "qcom,sm8850",
+        "qcom,canoe",
+        "qcom,canoep",
+        "qcom,kaanapali"
+      ],
+      "extraArgs": [
+        "msm.dpu_use_virtual_planes=1"
+      ],
+      "runtimeConfig": "configs/tb322fc_android_defconfig",
+      "runtimeCmakeArgs": [
+        "-DKSHIM_TB323FU_ANDROID_TOUCH_4M8_TRIAL=OFF"
+      ],
+      "bootPartitionBytes": 100663296,
+      "diagnosticMode": "rd-break",
+      "bootRequirements": {
+        "earlyFirmware": [
+          "qcom/gen80000_sqe.fw",
+          "qcom/gen80000_gmu.bin",
+          "qcom/gen80000_aqe.fw",
+          "qcom/sm8750/lenovo/elden/gen80000_zap.mbn",
+          "novatek_ts_csot_3k_fw.bin",
+          "qca/brhbtfw20.tlv",
+          "qca/lenovo/tb322fc/brhbtnv20.bin",
+          "qca/brhperifw20.tlv",
+          "qca/brhperinv20.bin",
+          "qca/tmel_peach_20.elf"
+        ],
+        "earlyDrivers": [
+          "qcom_pil_info",
+          "qcom_common",
+          "qcom_sysmon",
+          "qcom_q6v5",
+          "qcom_q6v5_pas",
+          "novatek-nvt36xxx-spi",
+          "hci_uart",
+          "btqca"
+        ],
+        "firmwareSha256": {
+          "qca/brhbtfw20.tlv": "837aea39d33e95a4ba272ef2a2306e5ecf9848853332d2f7b8002901d6af771d",
+          "qca/lenovo/tb322fc/brhbtnv20.bin": "f91354b0872f1f7680142df6852b2c8e67e3151ee2ad406b3d183a2fb539702e",
+          "qca/brhperifw20.tlv": "9a8de09a127a5943f8c23d4ee6005531b900f085740a292c9ab5a20e76db6cb5",
+          "qca/brhperinv20.bin": "3c73215352ba6422a9f2639124d27f64ec83a4d2aa91b388439ca88ea31098d0",
+          "qca/tmel_peach_20.elf": "a175c8d9d0e6b38b5ae23ff0175da795b14b8268919463d2b6e1cb2bfeebc9f8"
+        },
+        "moduleAliases": {
+          "hci_uart": [
+            "of:N*T*Cqcom,wcn7861-bt"
+          ]
+        }
+      }
+    },
+    "TB323FU": {
+      "displayName": "Lenovo Legion Y700 Gen 5",
+      "compatible": {
+        "soc": "SM8850",
+        "device": "baldur"
+      },
+      "dtb": "qcom/kaanapali-lenovo-baldur-display.dtb",
+      "required": [
+        "lenovo,baldur",
+        "qcom,kaanapali"
+      ],
+      "forbidden": [
+        "lenovo,elden",
+        "lenovo,tb322fc",
+        "qcom,sm8750",
+        "qcom,sm8550"
+      ],
+      "extraArgs": [
+        "baldur.end=hold",
+        "cpuidle_psci_domain.allow_cluster_off=0",
+        "msm.dpu_use_virtual_planes=0"
+      ],
+      "runtimeConfig": "configs/tb323fu_unified_defconfig",
+      "runtimeCmakeArgs": [
+        "-DKSHIM_TB323FU_ANDROID_TOUCH_4M8_TRIAL=ON"
+      ],
+      "bootPartitionBytes": 100663296,
+      "diagnosticMode": "verbose",
+      "bootRequirements": {
+        "earlyFirmware": [
+          "qcom/gen80200_sqe.fw",
+          "qcom/gen80200_gmu.bin",
+          "qcom/gen80200_aqe.fw",
+          "qcom/kaanapali/Lenovo/baldur/gen80200_zap.mbn",
+          "novatek/novatek_ts_fw.bin"
+        ],
+        "earlyDrivers": [
+          "qcom_pil_info",
+          "qcom_common",
+          "qcom_sysmon",
+          "qcom_q6v5",
+          "qcom_q6v5_pas",
+          "nt36536_ts"
+        ],
+        "firmwareSha256": {
+          "qcom/kaanapali/Lenovo/baldur/gen80200_zap.mbn": "2d56c203d49492363c5458812d8da41a3e6a8949f62b72f090653b4897f1013a",
+          "novatek/novatek_ts_fw.bin": "a374ce0856f9e61bd62de955e93d2585963a0636ff7390de2248386e896c114f"
+        }
+      }
+    },
+    "TB710FU": {
+      "displayName": "Lenovo Xiaoxin Pad Pro GT",
+      "compatible": {
+        "soc": "SM8650",
+        "device": "tb710fu"
+      },
+      "dtb": "qcom/sm8650-lenovo-tb710fu.dtb",
+      "required": [
+        "lenovo,tb710fu",
+        "qcom,sm8650"
+      ],
+      "forbidden": [
+        "lenovo,elden",
+        "lenovo,tb322fc",
+        "lenovo,baldur",
+        "lenovo,tb323fu",
+        "qcom,sm8750",
+        "qcom,sm8850",
+        "qcom,kaanapali"
+      ],
+      "extraArgs": [
+        "clk_ignore_unused",
+        "pd_ignore_unused",
+        "regulator_ignore_unused"
+      ],
+      "runtimeConfig": "configs/tb710fu_android_defconfig",
+      "runtimeCmakeArgs": [
+        "-DKSHIM_TB323FU_ANDROID_TOUCH_4M8_TRIAL=OFF"
+      ],
+      "bootPartitionBytes": 100663296,
+      "diagnosticMode": "rd-break",
+      "bootRequirements": {
+        "earlyFirmware": [],
+        "earlyDrivers": [],
+        "firmwareSha256": {}
+      }
+    }
+  }
+}

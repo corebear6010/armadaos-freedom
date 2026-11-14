@@ -62,7 +62,7 @@ ARMADA_CHANNEL_STATE="$TEST_TMP/channel"
 
 # Literal Freedom target: the expected repository must not be derived from the
 # production constants, or a half-migrated implementation would pass by agreement.
-FREEDOM=ghcr.io/mydanyi/armadaos-freedom
+FREEDOM=ghcr.io/armadaos-freedom/armadaos-freedom
 UPSTREAM_CANONICAL=ghcr.io/armada-os/armada
 UPSTREAM_LEGACY=ghcr.io/virtudude/armada
 
@@ -153,7 +153,7 @@ assert_no_target beta \
 assert_no_target beta \
     "ostree-image-signed:docker://${FREEDOM}-extra:stable"
 assert_no_target beta \
-    "ostree-image-signed:docker://ghcr.io/mydanyi/armadaos freedom:stable"
+    "ostree-image-signed:docker://ghcr.io/armadaos-freedom/armadaos freedom:stable"
 assert_no_target beta \
     "containers-storage:localhost/armada:latest"
 assert_no_target beta \
@@ -177,7 +177,9 @@ assert_no_target beta \
 )
 
 UPDATE="$ROOT/system_files/usr/libexec/armada/armada-update"
-grep -Fq 'if armada_steam_channels_apply "$repository" "$desired"; then' "$UPDATE"
+grep -Fq 'exec /usr/bin/python3 -m updates.legacy_cli "$@"' "$UPDATE"
+grep -Fq 'client.run("system", "update"' \
+    "$ROOT/system_files/usr/lib/armada/updates/legacy_cli.py"
 
 python3 - "$ROOT" <<'PY'
 import json

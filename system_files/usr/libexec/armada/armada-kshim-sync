@@ -42,6 +42,7 @@ TOOL_FILES = {
     "repacker": "repack_boot_v4.py",
     "avbtool": "avbtool.py",
 }
+SIGNER_FILE = "kshim-avb-sign.py"
 
 
 class SyncError(Exception):
@@ -382,7 +383,7 @@ def acquire_lock():
 
 def validate_full_args(args):
     for flag in ("stock_boot", "stock_sha256", "runtime", "runtime_sha256",
-                 "partuuid", "expected_current_sha256", "work"):
+                 "avb_key", "partuuid", "expected_current_sha256", "work"):
         need(getattr(args, flag),
              "--%s is required for a full sync" % flag.replace("_", "-"))
     expected = checksum_text(args.expected_current_sha256,
@@ -400,6 +401,11 @@ def validate_full_args(args):
     for key in sorted(TOOL_FILES):
         path = os.path.join(args.tools_dir, TOOL_FILES[key])
         need(os.path.isfile(path), "kShimC tool missing (%s): %s" % (key, path))
+    need(os.path.isfile(args.avb_key), "AVB private key missing: %s" % args.avb_key)
+    if args.avb_signer is None:
+        args.avb_signer = os.path.join(args.libexec, SIGNER_FILE)
+    need(os.path.isfile(args.avb_signer),
+         "AVB signer missing: %s" % args.avb_signer)
     validate_work(args.work)
     return expected
 
@@ -435,6 +441,8 @@ def run_prepare(args, entry, out):
         "--unpacker", os.path.join(args.tools_dir, TOOL_FILES["unpacker"]),
         "--repacker", os.path.join(args.tools_dir, TOOL_FILES["repacker"]),
         "--avbtool", os.path.join(args.tools_dir, TOOL_FILES["avbtool"]),
+        "--avb-key", args.avb_key,
+        "--avb-signer", args.avb_signer,
         "--out", out,
         "--source-label", "armada-kshim-sync",
         "--entry", entry,
@@ -682,6 +690,8 @@ def parse_args(argv=None):
     parser.add_argument("--stock-sha256")
     parser.add_argument("--runtime")
     parser.add_argument("--runtime-sha256")
+    parser.add_argument("--avb-key")
+    parser.add_argument("--avb-signer")
     parser.add_argument("--partuuid")
     parser.add_argument("--expected-current-sha256")
     parser.add_argument("--work")

@@ -1,0 +1,17 @@
+# Shared PowerDevil defaults for every Armada device and both KDE shells
+# (Plasma Desktop and Plasma Mobile). /etc/xdg is read before ~/.config, so an
+# explicit user choice in ~/.config/powerdevilrc still wins; no key is marked
+# immutable with the [$i] flag.
+#
+# PowerButtonAction=128 (verified against PowerDevil 6.7.5) is
+# ToggleScreenOnOff: a short power press only blanks or restores the display,
+# without suspending, freezing apps or muting audio. PowerDownAction, LidAction
+# and AutoSuspendAction are deliberately left at their stock values.
+[AC][SuspendAndShutdown]
+PowerButtonAction=128
+
+[Battery][SuspendAndShutdown]
+PowerButtonAction=128
+
+[LowBattery][SuspendAndShutdown]
+PowerButtonAction=128

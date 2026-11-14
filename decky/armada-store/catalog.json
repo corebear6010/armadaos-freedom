@@ -401,7 +401,7 @@
       "icon": "https://raw.githubusercontent.com/xXJSONDeruloXx/decky-lsfg-vk/main/assets/decky-lossless-logo.png",
       "install": {
         "type": "deckyplugin",
-        "releases": "https://api.github.com/repos/xXJSONDeruloXx/decky-lsfg-vk/releases/364422297",
+        "releases": "https://api.github.com/repos/xXJSONDeruloXx/decky-lsfg-vk/releases/latest",
         "asset": "^Decky\\.LSFG-VK\\.zip$"
       }
     },
@@ -413,7 +413,7 @@
       "icon": "https://github.com/user-attachments/assets/c7dad5da-0b29-4710-8a57-b58e4e407abd",
       "install": {
         "type": "deckyplugin",
-        "releases": "https://api.github.com/repos/justradical/decky-optiscaler-arm64ec/releases/394141296",
+        "releases": "https://api.github.com/repos/justradical/decky-optiscaler-arm64ec/releases/latest",
         "asset": "^OptiScaler\\.zip$"
       }
     }

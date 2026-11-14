@@ -274,8 +274,11 @@ class WrapperTest(unittest.TestCase):
         self.unpacker = self.tree.root / "unpack_bootimg"
         self.repacker = self.tree.root / "repack"
         self.avbtool = self.tree.root / "avbtool"
+        self.avb_key = self.tree.root / "testkey_rsa4096.pem"
+        self.avb_signer = self.libexec / "kshim-avb-sign.py"
         for path in (self.stock, self.runtime, self.mkbootimg,
-                     self.unpacker, self.repacker, self.avbtool):
+                     self.unpacker, self.repacker, self.avbtool,
+                     self.avb_key, self.avb_signer):
             path.write_bytes(b"TOOL")
         self.record = self.tree.root / "record.json"
 
@@ -283,7 +286,7 @@ class WrapperTest(unittest.TestCase):
         self.tmp.cleanup()
 
     def run_wrapper(self, out, label="t020", exit_code="0", boot=None,
-                    entry=None, cwd=None):
+                    entry=None, cwd=None, include_avb_key=True):
         env = dict(os.environ)
         env.update({"KSHIM_LIBEXEC": str(self.libexec), "ARGS_FILE": str(ARGS_FILE),
                     "FAKE_RECORD": str(self.record), "FAKE_EXIT": exit_code})
@@ -291,8 +294,10 @@ class WrapperTest(unittest.TestCase):
                 "--sysroot", str(self.tree.sysroot),
                 "--stock-boot", str(self.stock), "--runtime", str(self.runtime),
                 "--packer", str(self.mkbootimg), "--unpacker", str(self.unpacker),
-                "--repacker", str(self.repacker), "--avbtool", str(self.avbtool),
-                "--out", str(out)]
+                "--repacker", str(self.repacker), "--avbtool", str(self.avbtool)]
+        if include_avb_key:
+            argv += ["--avb-key", str(self.avb_key)]
+        argv += ["--avb-signer", str(self.avb_signer), "--out", str(out)]
         if label is not None:
             argv += ["--source-label", label]
         if entry is not None:
@@ -318,6 +323,8 @@ class WrapperTest(unittest.TestCase):
             "--unpacker", str(self.unpacker),
             "--repacker", str(self.repacker),
             "--avbtool", str(self.avbtool),
+            "--avb-key", str(self.avb_key),
+            "--avb-signer", str(self.avb_signer),
             "--installer-result", str(out / "installer-result.json"),
             "--boot-dir", str(self.tree.boot),
             "--out", str(out / "candidate"),
@@ -408,6 +415,13 @@ class WrapperTest(unittest.TestCase):
         self.assertIn("packer failed", proc.stderr)
         self.assertNotIn("candidate:", proc.stdout)
         self.assertFalse((out / "candidate/boot.img").exists())
+
+    def test_missing_avb_key_rejected_before_output(self):
+        out = self.tree.root / "stage"
+        proc = self.run_wrapper(out, include_avb_key=False)
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("--avb-key is required", proc.stderr)
+        self.assertFalse(out.exists())
 
     def test_non_empty_out_rejected(self):
         out = self.tree.root / "stage"

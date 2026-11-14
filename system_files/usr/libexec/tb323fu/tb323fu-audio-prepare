@@ -1,0 +1,165 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+#
+# tb323fu-audio-prepare -- bring the TB323FU (lenovo,baldur) speaker path up on
+# the common Armada image, and do nothing at all on every other device.
+#
+# Without its own ADSP firmware this board has no sound card, and the card only
+# shows up with the ADSP running its own firmware, topology and ACF data. Those
+# three blobs ship in the image as one fixed per-model bundle, installed by the
+# build from devices/lenovo-tb323fu/firmware/audio after its SHA256SUMS check.
+# This helper copies the bundle into the firmware search path, activates the
+# speaker protection fragment for this board only and starts the ADSP when it
+# is offline. It never stops or restarts a DSP, never unloads a module, never
+# reboots and never starts the CDSP.
+#
+# The bundle is the only firmware source: nothing is read from Android
+# partitions, from a by-partlabel device or from any runtime cache, so the
+# image works standalone on Linux without Android installed.
+#
+# Paths can be overridden from the environment for fixture tests; the defaults
+# are the real system paths.
+set -u
+
+readonly FW_REL='qcom/kaanapali/lenovo/baldur'
+readonly ADSP_FW="$FW_REL/adsp.mbn"
+readonly FW_FILES='adsp.mbn adsp_dtb.mbn aw882xx_acf.bin'
+readonly TOPO_REL='qcom/kaanapali/LENOVO-TB323FU-tplg.bin'
+
+compat=${TB323FU_DT_COMPATIBLE:-/sys/firmware/devicetree/base/compatible}
+procfs=${TB323FU_REMOTEPROC_DIR:-/sys/class/remoteproc}
+bundle=${TB323FU_FIRMWARE_DIR:-/usr/share/tb323fu/firmware/audio}
+fw_param=${TB323FU_FIRMWARE_CLASS_PATH:-/sys/module/firmware_class/parameters/path}
+run_fw=${TB323FU_RUN_FIRMWARE:-/run/armada-firmware}
+etc_dir=${TB323FU_ETC_DIR:-/etc}
+template=${TB323FU_DSP_TEMPLATE:-/usr/share/tb323fu/wireplumber/61-tb323fu-speakers-dsp.conf}
+topology=${TB323FU_TOPOLOGY:-/usr/lib/firmware/$TOPO_REL}
+dsp_conf="$etc_dir/wireplumber/wireplumber.conf.d/61-tb323fu-speakers-dsp.conf"
+
+log() { printf 'tb323fu-audio-prepare: %s\n' "$*" >&2; }
+die() {
+    log "$*"
+    exit 1
+}
+
+# Model gate FIRST, before any read of the firmware bundle, the remoteprocs, the
+# gain path or WirePlumber: one exact NUL-delimited device-tree token. A longer
+# token such as lenovo,baldur-x must not match.
+if ! grep -azFxq lenovo,baldur "$compat" 2>/dev/null; then
+    log 'device is not lenovo,baldur; nothing to do'
+    exit 0
+fi
+
+# Resolve every required input before writing anything: a missing or empty file
+# has to fail here, before the ADSP is touched. The topology is the packaged
+# copy the kernel reads for this board, the template is the speaker protection
+# fragment; both must be real, nonempty files.
+[ -s "$topology" ] || die "missing or empty topology $topology; not starting the ADSP"
+[ -s "$template" ] || die "missing or empty speaker protection template $template; not starting the ADSP"
+
+# The bundle layout is fixed: the two ADSP blobs under the board's firmware
+# subdirectory, the ACF data at its root where the kernel asks for it by bare
+# name. Each file is looked up at exactly that one path; there is no fallback to
+# another location, to Android or to a runtime cache.
+names=()
+sources=()
+for file in $FW_FILES; do
+    case $file in
+    aw882xx_acf.bin) pick="$bundle/$file" ;;
+    *) pick="$bundle/$FW_REL/$file" ;;
+    esac
+    [ -s "$pick" ] ||
+        die "missing or empty bundled firmware '$file' at $pick; not starting the ADSP"
+    names+=("$file")
+    sources+=("$pick")
+done
+
+# Firmware search path: reuse the absolute path firmware_class already points at
+# (touch and GPU firmware live there), and fall back to /run/armada-firmware
+# when that parameter is empty or unreadable. An existing value is used
+# literally: only its trailing newline is dropped, so spaces are kept and a
+# semicolon-separated list is not split. A relative value is rejected rather
+# than being resolved against the wrong directory. The fallback is written back
+# into the parameter later, so it has to be absolute as well.
+dest=$run_fw
+fw_needs_write=0
+if [ -r "$fw_param" ]; then
+    current=$(tr -d '\n' <"$fw_param")
+    if [ -n "$current" ]; then
+        case $current in
+        /*) dest=$current ;;
+        *) die "firmware_class path '$current' is not absolute; not starting the ADSP" ;;
+        esac
+    else
+        fw_needs_write=1
+    fi
+else
+    fw_needs_write=1
+fi
+if [ "$fw_needs_write" -eq 1 ]; then
+    case $dest in
+    /*) ;;
+    *) die "run firmware path '$dest' is not absolute; not starting the ADSP" ;;
+    esac
+fi
+
+install -d -m 0755 "$dest/$FW_REL" "$dest/${TOPO_REL%/*}" ||
+    die "cannot create $dest/$FW_REL and $dest/${TOPO_REL%/*}"
+# Additive: individual files only, nothing else in the tree is replaced.
+i=0
+while [ "$i" -lt "${#names[@]}" ]; do
+    case ${names[$i]} in
+    aw882xx_acf.bin) target="$dest/aw882xx_acf.bin" ;;
+    *) target="$dest/$FW_REL/${names[$i]}" ;;
+    esac
+    install -m 0644 "${sources[$i]}" "$target" || die "cannot install $target"
+    i=$((i + 1))
+done
+# The topology goes next to the other qcom blobs the kernel asks for by name.
+install -m 0644 "$topology" "$dest/$TOPO_REL" || die "cannot install $dest/$TOPO_REL"
+
+# The speaker protection fragment ships as an inert template; only this exact
+# board activates it. The packaged copy stays outside every scanned *.conf
+# directory, so no other machine gets the broad WirePlumber node rule.
+install -D -m 0644 "$template" "$dsp_conf" || die "cannot install $dsp_conf"
+
+# Only an empty or unreadable parameter is filled in, with the absolute path the
+# files above were staged in; an existing value stays byte for byte unchanged.
+# Without this the kernel would not look in $dest at all, so a failed write is
+# fatal and happens before the ADSP is started.
+if [ "$fw_needs_write" -eq 1 ]; then
+    printf '%s\n' "$dest" >"$fw_param" ||
+        die "cannot write '$dest' to $fw_param; not starting the ADSP"
+fi
+
+# Start-only: the exact ADSP remoteproc running the expected firmware path.
+# A remoteproc is selected only when the name is adsp AND its firmware is the
+# expected one; an adsp on any other firmware fails instead of being touched,
+# and every other processor (CDSP included) is skipped untouched.
+found=0
+for rp in "$procfs"/remoteproc*; do
+    [ -d "$rp" ] || continue
+    name=$(cat "$rp/name" 2>/dev/null) || continue
+    [ "$name" = adsp ] || continue
+    firmware=$(cat "$rp/firmware" 2>/dev/null) || continue
+    if [ "$firmware" != "$ADSP_FW" ]; then
+        die "remoteproc '${name}' runs '${firmware}', expected '${ADSP_FW}'; not touching it"
+    fi
+    found=1
+    state=$(cat "$rp/state" 2>/dev/null) || die "cannot read $rp/state"
+    case $state in
+    offline)
+        printf start >"$rp/state" || die "cannot start $rp"
+        log "started $name ($firmware)"
+        ;;
+    running)
+        log "$name is already running; leaving it alone"
+        ;;
+    *)
+        die "$name is '$state'; only offline is started, never stopped or restarted"
+        ;;
+    esac
+done
+[ "$found" -eq 1 ] || die "no adsp remoteproc in $procfs; the sound card will not appear"
+
+log "firmware ready in $dest"

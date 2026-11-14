@@ -9,7 +9,36 @@
 #include <menu_text.h>
 #include <device_info.h>
 #include <boot_metrics.h>
+#include <boot_witness.h>
+#include <kshim_mmu.h>
+#if defined(CONFIG_KSHIM_STORAGE_ENTRY_PROBE) && CONFIG_KSHIM_STORAGE_ENTRY_PROBE
+#include <storage_probe_io.h>
+#include <storage_probe_export.h>
+static struct storage_probe_snapshot StorageEntrySnapshot;
+const struct storage_probe_snapshot *storage_probe_entry_snapshot(void)
+{
+    return &StorageEntrySnapshot;
+}
+#endif
+#if defined(CONFIG_KSHIM_UFS_READ_PROBE) && CONFIG_KSHIM_UFS_READ_PROBE
+#include <storage_ufs_read_native.h>
+#include <storage_ufs_read_export.h>
+#endif
+#if defined(CONFIG_KSHIM_UFS_SETTINGS) && CONFIG_KSHIM_UFS_SETTINGS
+#include <storage_settings_native.h>
+#include <psci.h>
+#include <update_trial_boot.h>
+#if CONFIG_KSHIM_QCOM_REBOOT
+#include <qcom_reboot.h>
+static uint32_t EdlRequestSeen;
+static int EdlRequestStatus;
+#if CONFIG_KSHIM_EDL_PROBE
+static struct kshim_qcom_edl_probe EdlProbe;
+#endif
+#endif
+#endif
 #include <dt.h>
+#include <tb323fu_android_touch.h>
 #include <initrd.h>
 #include <qcom_dt.h>
 #include <dt_handoff.h>
@@ -234,6 +263,23 @@ static void sync_image_cache(uint64_t address, uint64_t size)
     asm volatile("dsb ish\nisb" : : : "memory");
 }
 
+#if (defined(CONFIG_KSHIM_TB323FU_ANDROID_TOUCH_4M8) && \
+     CONFIG_KSHIM_TB323FU_ANDROID_TOUCH_4M8) || KSHIM_TB323FU_ANDROID_TOUCH_4M8_TRIAL
+/* The Android tree stays at ABL's original address. Make the one-cell update
+ * visible at PoC before the original kernel changes its cache/MMU state. */
+static void clean_android_trial_fdt(const void *fdt)
+{
+    uint64_t ctr;
+    asm volatile("mrs %0, ctr_el0" : "=r"(ctr));
+    const uint64_t line = 4ULL << ((ctr >> 16) & 0xf);
+    const uint64_t base = (uint64_t)(uintptr_t)fdt;
+    const uint64_t end = base + fdt_totalsize(fdt);
+    for (uint64_t p = base & ~(line - 1); p < end; p += line)
+        asm volatile("dc cvac, %0" : : "r"(p) : "memory");
+    asm volatile("dsb sy" : : : "memory");
+}
+#endif
+
 static void print_entry_name(const MANIFEST_ENTRY *entry)
 {
     uint32_t remaining = entry->name_len;
@@ -247,7 +293,7 @@ static void print_entry_name(const MANIFEST_ENTRY *entry)
 }
 
 static uint32_t select_image(const MANIFEST_VIEW *view, uint64_t fdt, uint64_t linux_base,
-                             const struct device_info *info)
+                             const struct device_info *info, uint32_t *boot_target)
 {
     uint32_t indexes[MANIFEST_MAX_ENTRIES];
     char labels[MANIFEST_MAX_ENTRIES][96];
@@ -320,6 +366,9 @@ static uint32_t select_image(const MANIFEST_VIEW *view, uint64_t fdt, uint64_t l
         printf("Unsafe UI shutdown; refusing payload handoff\n");
         for (;;) (void)delay(100000);
     }
+    *boot_target=roles[selected]==KSHIM_MENU_ROLE_ANDROID ? 1u :
+                 roles[selected]==KSHIM_MENU_ROLE_INTERNAL ? 2u :
+                 roles[selected]==KSHIM_MENU_ROLE_TF ? 3u : 0u;
     return indexes[selected];
 }
 
@@ -333,6 +382,36 @@ static void prepare_boot(void)
         for (;;) (void)delay(100000);
     }
 }
+
+#if defined(CONFIG_KSHIM_UFS_SETTINGS) && CONFIG_KSHIM_UFS_SETTINGS
+static void remember_selected_boot(uint32_t target,uint64_t selected_fdt)
+{
+    if (target>=1 && target<=3) {
+        int rc=storage_settings_native_note_boot(target);
+        if (rc && rc!=KSHIM_STORAGE_NOT_FOUND)
+            printf("Last boot setting could not be saved: %d\n",rc);
+        if (!storage_settings_native_handoff_safe()) {
+            __asm__ volatile("msr daifset, #0xf" ::: "memory");
+            for (;;) __asm__ volatile("wfe");
+        }
+    }
+    /* Refresh evidence after history changed. Only our private Linux DT is
+     * writable; the firmware's Android DT is never edited here. */
+    if (selected_fdt==(uint64_t)(uintptr_t)HandoffDtb) {
+        void *blob=HandoffDtb;
+        if (fdt_open_into(blob,blob,sizeof(HandoffDtb))==0) {
+            int status=storage_settings_native_export(blob);
+            int chosen=fdt_path_offset(blob,"/chosen");
+            if (chosen>=0)
+                (void)fdt_setprop_u32(blob,chosen,"kshim,settings-export-status",(uint32_t)status);
+            if (fdt_pack(blob) || dt_validate(blob,sizeof(HandoffDtb))) {
+                __asm__ volatile("msr daifset, #0xf" ::: "memory");
+                for (;;) __asm__ volatile("wfe");
+            }
+        }
+    }
+}
+#endif
 
 int kshim_main(
     uint64_t device_tree_address,
@@ -376,12 +455,55 @@ int kshim_main(
         runtime_fdt = NULL;
         device_tree_address = 0;
     }
+    /* Freeze firmware slot and boot-lock evidence before any mutation. */
+    const int booted_slot = kshim_boot_slot_read(runtime_fdt);
+    const int boot_lock_state = kshim_boot_lock_read(runtime_fdt);
+    /* Turn translation on before anything else touches memory.  Up to this
+     * point every fetch, load and store runs uncached and strictly ordered,
+     * which on this platform costs tens of seconds before the menu appears.
+     * kshim_mmu_configure_early() verifies the runtime load base against the
+     * image header first, and a rejected configuration leaves the context
+     * exactly as it was, so translation simply stays off and the previous
+     * behaviour is preserved. */
+    const kshim_mmu_early_config_t early_mmu = {
+        .fdt = runtime_fdt,
+        .payload_base = linux_base,
+        .payload_end = (manifest_address != 0U && manifest_size != 0U)
+            ? manifest_address + manifest_size : 0U,
+    };
+    const int early_mmu_status = kshim_mmu_configure_early(&early_mmu);
+    kshim_boot_metrics_set_mmu(kshim_mmu_is_enabled() ? 1U : 0U, early_mmu_status);
     /* Read-only device info from the already validated runtime DT, collected
      * once here and handed to the menu. A NULL runtime FDT stays all-unknown;
      * there is no extra FDT probing or validation path. */
     struct device_info device_info = {0};
     if (runtime_fdt)
         device_info_read(runtime_fdt, &device_info);
+#if defined(CONFIG_KSHIM_STORAGE_ENTRY_PROBE) && CONFIG_KSHIM_STORAGE_ENTRY_PROBE
+#if defined(CONFIG_KSHIM_UFS_READ_PROBE) && CONFIG_KSHIM_UFS_READ_PROBE
+#if defined(CONFIG_KSHIM_UFS_READ_SCREEN) && CONFIG_KSHIM_UFS_READ_SCREEN
+    /* Screen profile: only the actual TB322FC with a validated runtime FDT,
+     * and only the scanout is touched - no resources, menu, IRQ, touch or SMP
+     * initialization happens before the capture. An unavailable display
+     * leaves the existing IO behaviour byte-for-byte unchanged. */
+    if (runtime_fdt && device_info.board == DEVICE_BOARD_TB322FC)
+        (void)storage_ufs_read_screen_init(runtime_fdt);
+#endif
+    /* Actual incoming board identity; the native wrapper proves the CPU/DMA
+     * preconditions, claims and releases the host, and records one report. */
+    storage_ufs_read_native_capture(device_info.board, &StorageEntrySnapshot);
+    if (!storage_ufs_read_entry_report()->handoff_safe) {
+        /* The firmware state was not restored. There is no safe handoff, so
+         * stop here before resources, menu and any payload jump. */
+        __asm__ volatile("msr daifset, #0xf" ::: "memory");
+        for (;;)
+            __asm__ volatile("wfe");
+    }
+#else
+    /* Actual incoming board identity; no menu selection influences MMIO. */
+    storage_probe_native_capture(device_info.board, &StorageEntrySnapshot);
+#endif
+#endif
     /* Early, read-only ramoops capture from the validated runtime DT, taken
      * exactly once before the memory snapshot/console/resources work.  The
      * layout starts zeroed (valid == false) so a failed capture never leaves a
@@ -666,13 +788,68 @@ int kshim_main(
             arm64_boot_linux(linux_base, device_tree_address, 4);
         }
 
+#if defined(CONFIG_KSHIM_UFS_SETTINGS) && CONFIG_KSHIM_UFS_SETTINGS
+        const struct kshim_config_values defaults={0,0,(uint32_t)kshim_menu_get_language(), 0, 0};
+        (void)storage_settings_native_open(device_info.board,&defaults);
+        if (!storage_settings_native_handoff_safe()) {
+            __asm__ volatile("msr daifset, #0xf" ::: "memory");
+            for (;;) __asm__ volatile("wfe");
+        }
+#if CONFIG_KSHIM_QCOM_REBOOT
+#if CONFIG_KSHIM_EDL_PROBE
+        (void)kshim_qcom_reboot_probe_edl(
+            (const void *)(uintptr_t)device_tree_address,&EdlProbe);
+#endif
+        /* Linux requests this through the provisioned settings store. Clear
+         * it durably before entering EDL so a later reset boots normally. */
+        struct kshim_settings_session *session=storage_settings_native_session();
+        uint32_t action=0;
+        EdlRequestSeen=session->values.next_action;
+        EdlRequestStatus=kshim_settings_take_action(session,&action);
+        if (!storage_settings_native_handoff_safe()) {
+            __asm__ volatile("msr daifset, #0xf" ::: "memory");
+            for (;;) __asm__ volatile("wfe");
+        }
+        if (!EdlRequestStatus && action==1) {
+            printf("Entering EDL from Linux request\n");
+            EdlRequestStatus=kshim_qcom_reboot_request(
+                (const void *)(uintptr_t)device_tree_address,KSHIM_QCOM_REBOOT_EDL);
+            if (EdlRequestStatus==KSHIM_QCOM_REBOOT_ROLLBACK_FAILED) {
+                __asm__ volatile("msr daifset, #0xf" ::: "memory");
+                for (;;) __asm__ volatile("wfe");
+            }
+        }
+        if (EdlRequestSeen && EdlRequestStatus)
+            printf("EDL request failed: %d\n",EdlRequestStatus);
+#endif
+        kshim_platform_bind_settings(storage_settings_native_session());
+#endif
+        uint32_t boot_target=0;
         uint32_t selected_index = select_image(&view, device_tree_address, linux_base,
-                                               &device_info);
+                                               &device_info,&boot_target);
+#if defined(CONFIG_KSHIM_UFS_SETTINGS) && CONFIG_KSHIM_UFS_SETTINGS
+        kshim_platform_bind_settings(NULL);
+        if (!storage_settings_native_handoff_safe()) {
+            __asm__ volatile("msr daifset, #0xf" ::: "memory");
+            for (;;) __asm__ volatile("wfe");
+        }
+#endif
         kshim_boot_metrics_record_once(KSHIM_BOOT_STAGE_HANDOFF);
         const MANIFEST_ENTRY *entry = view.entries[selected_index];
         if ((entry->flags & MF_ENTRY_FLAG_BASE_IMAGE) &&
             !(entry->flags & MF_ENTRY_FLAG_HAS_DEVICE_TREE_BLOB)) {
             dt_probe_report((void *)runtime_fdt, "m14:base=selected");
+#if (defined(CONFIG_KSHIM_TB323FU_ANDROID_TOUCH_4M8) && \
+     CONFIG_KSHIM_TB323FU_ANDROID_TOUCH_4M8) || KSHIM_TB323FU_ANDROID_TOUCH_4M8_TRIAL
+            if (runtime_fdt && device_info.board == DEVICE_BOARD_TB323FU &&
+                entry->type == MF_ENTRY_TYPE_LINUX) {
+                int touch_rc = tb323fu_android_touch_spi_trial(
+                    (void *)runtime_fdt, fdt_totalsize(runtime_fdt));
+                printf("Android touch SPI 4.8 MHz: %d\n", touch_rc);
+                if (touch_rc >= 0)
+                    clean_android_trial_fdt(runtime_fdt);
+            }
+#endif
         }
         uint64_t selected_device_tree = device_tree_address;
         if (entry->flags & MF_ENTRY_FLAG_HAS_DEVICE_TREE_BLOB) {
@@ -775,8 +952,104 @@ int kshim_main(
                                                        : NULL);
                     }
                     if (status == 0) {
+                        handoff_stage = "boot-state";
+                        status = fdt_open_into(blob, blob, sizeof(HandoffDtb));
+                    }
+                    if (status == 0) {
+                        status = kshim_boot_witness_export(blob, booted_slot);
+                    }
+                    if (status == 0) {
+                        status = kshim_boot_lock_export(blob, boot_lock_state);
+                    }
+                    if (status == 0) {
                         /* Re-pack the modified DT, then validate the result. */
                         (void)kshim_boot_metrics_export(blob);
+#if defined(CONFIG_KSHIM_STORAGE_ENTRY_PROBE) && CONFIG_KSHIM_STORAGE_ENTRY_PROBE
+                        /* Failure to fit diagnostics must not stop payload boot. */
+                        if (fdt_open_into(blob, blob, sizeof(HandoffDtb)) == 0) {
+                            int probe_export_status = storage_probe_export(blob, &StorageEntrySnapshot);
+#if defined(CONFIG_KSHIM_UFS_READ_PROBE) && CONFIG_KSHIM_UFS_READ_PROBE
+                            /* Separate native read report; a failed insertion is
+                             * exported as a status and, after a safe release, does
+                             * not block the payload handoff. */
+                            int read_export_status = storage_ufs_read_export(blob, storage_ufs_read_entry_report());
+#if defined(CONFIG_KSHIM_UFS_LINK_WAKE) && CONFIG_KSHIM_UFS_LINK_WAKE
+                            /* Auxiliary record, independent of the frozen read
+                             * property: v6 could only report CLAIM -23 after a
+                             * cleanup that had already rewritten host->link, so
+                             * the saved before/after states are published here.
+                             * Its failure is only a status; it never blocks the
+                             * payload handoff. */
+                            int link_export_status = storage_ufs_link_export(
+                                blob, storage_ufs_read_entry_report());
+#if defined(CONFIG_KSHIM_UFS_DEVICE_WAKE) && CONFIG_KSHIM_UFS_DEVICE_WAKE
+                            int power_export_status = storage_ufs_power_export(
+                                blob, storage_ufs_read_entry_report());
+#if defined(CONFIG_KSHIM_UFS_SETTINGS) && CONFIG_KSHIM_UFS_SETTINGS
+                            const char *build = "gen4-ufs-settings-v11";
+#else
+                            const char *build = "gen4-ufs-read-v10";
+#endif
+#else
+                            const char *build = "gen4-ufs-read-v8";
+#endif
+#elif defined(CONFIG_KSHIM_UFS_READ_SCREEN) && CONFIG_KSHIM_UFS_READ_SCREEN
+                            const char *build = "gen4-ufs-read-v5";
+#else
+                            const char *build = "gen4-ufs-read-v4";
+#endif
+#else
+                            const char *build = "gen4-entry-v3";
+#endif
+                            int chosen = fdt_path_offset(blob, "/chosen");
+                            if (chosen >= 0) {
+                                (void)fdt_setprop_string(blob, chosen, "kshim,storage-probe-build", build);
+                                (void)fdt_setprop_u32(blob, chosen, "kshim,storage-export-status",
+                                                    (uint32_t)probe_export_status);
+#if defined(CONFIG_KSHIM_UFS_READ_PROBE) && CONFIG_KSHIM_UFS_READ_PROBE
+                                (void)fdt_setprop_u32(blob, chosen, "kshim,ufs-read-export-status",
+                                                    (uint32_t)read_export_status);
+#if defined(CONFIG_KSHIM_UFS_LINK_WAKE) && CONFIG_KSHIM_UFS_LINK_WAKE
+                                /* Separate status for the separate property. */
+                                (void)fdt_setprop_u32(blob, chosen, "kshim,ufs-link-export-status",
+                                                    (uint32_t)link_export_status);
+#if defined(CONFIG_KSHIM_UFS_DEVICE_WAKE) && CONFIG_KSHIM_UFS_DEVICE_WAKE
+                                (void)fdt_setprop_u32(blob, chosen, "kshim,ufs-power-export-status",
+                                                    (uint32_t)power_export_status);
+#endif
+#endif
+#endif
+                            }
+                        }
+#endif
+#if defined(CONFIG_KSHIM_UFS_SETTINGS) && CONFIG_KSHIM_UFS_SETTINGS
+                        if (fdt_open_into(blob,blob,sizeof(HandoffDtb))==0) {
+                            int settings_status=storage_settings_native_export(blob);
+                            int chosen=fdt_path_offset(blob,"/chosen");
+                            if (chosen>=0) {
+                                (void)fdt_setprop_u32(blob,chosen,"kshim,settings-export-status",
+                                                    (uint32_t)settings_status);
+                                (void)fdt_setprop_string(blob,chosen,"kshim,settings-build",
+                                                       "native-ufs-settings-v3");
+#if CONFIG_KSHIM_QCOM_REBOOT
+                                (void)fdt_setprop_u32(blob,chosen,"kshim,edl-request-version",1);
+                                (void)fdt_setprop_u32(blob,chosen,"kshim,edl-request-seen",EdlRequestSeen);
+                                (void)fdt_setprop_u32(blob,chosen,"kshim,edl-request-status",(uint32_t)EdlRequestStatus);
+#if CONFIG_KSHIM_EDL_PROBE
+                                const uint32_t fields[]={1,(uint32_t)EdlProbe.status,
+                                    EdlProbe.scm_available_mask,EdlProbe.psci_version,
+                                    (uint32_t)EdlProbe.reset2_status,(uint32_t)EdlProbe.oem_status,
+                                    EdlProbe.oem_available,EdlProbe.route,
+                                    (uint32_t)(EdlProbe.dload_address>>32),
+                                    (uint32_t)EdlProbe.dload_address,EdlProbe.dload_value};
+                                fdt32_t report[11];
+                                for (unsigned i=0;i<11;++i) report[i]=cpu_to_fdt32(fields[i]);
+                                (void)fdt_setprop(blob,chosen,"kshim,edl-probe",report,sizeof(report));
+#endif
+#endif
+                            }
+                        }
+#endif
                         handoff_stage = "pack";
                         int packed = fdt_pack(blob);
                         if (packed != 0) {
@@ -1097,10 +1370,66 @@ int kshim_main(
                 if (n > 0 && n < (int)sizeof(report))
                     dt_probe_report((void *)runtime_fdt, report);
                 printf("Memory handoff failed; booting base image\n");
+#if defined(CONFIG_KSHIM_UFS_SETTINGS) && CONFIG_KSHIM_UFS_SETTINGS
+                remember_selected_boot(1,0);
+#endif
                 prepare_boot();
                 arm64_boot_linux(linux_base, device_tree_address, 4);
             }
         }
+#if defined(CONFIG_KSHIM_UFS_SETTINGS) && CONFIG_KSHIM_UFS_SETTINGS
+        if (selected_device_tree == (uint64_t)(uintptr_t)HandoffDtb &&
+            entry->type == MF_ENTRY_TYPE_LINUX) {
+            int chosen = fdt_path_offset(HandoffDtb, "/chosen");
+            int root_len = 0;
+            int cmdline_len = 0;
+            int tx_len = 0;
+            const char *root_medium = chosen >= 0
+                ? (const char *)fdt_getprop(HandoffDtb, chosen,
+                                            "armada,root-medium", &root_len)
+                : NULL;
+            bool internal_linux = root_medium != NULL && root_len > 0 &&
+                root_medium[root_len - 1] == '\0' &&
+                strcmp(root_medium, "internal") == 0;
+            const char *cmdline = chosen >= 0
+                ? (const char *)fdt_getprop(HandoffDtb, chosen,
+                                            "bootargs", &cmdline_len)
+                : NULL;
+            const void *tx = chosen >= 0
+                ? fdt_getprop(HandoffDtb, chosen,
+                              "armada,update-transaction", &tx_len)
+                : NULL;
+            const void *tx_ptr = tx != NULL
+                ? (tx_len > 0 ? tx : (const void *)&tx_len)
+                : NULL;
+            size_t tx_bytes = tx != NULL && tx_len > 0 ? (size_t)tx_len : 0u;
+            int gate_rc = kshim_update_trial_boot(
+                booted_slot, internal_linux, cmdline,
+                cmdline != NULL && cmdline_len > 0 ? (size_t)cmdline_len : 0u,
+                tx_ptr, tx_bytes);
+
+            if (!storage_settings_native_handoff_safe()) {
+                __asm__ volatile("msr daifset, #0xf" ::: "memory");
+                for (;;)
+                    __asm__ volatile("wfe");
+            }
+            if (gate_rc == KSHIM_UPDATE_BOOT_RESTART_REQUIRED) {
+                prepare_boot();
+                (void)kshim_psci_request_system_reset();
+                __asm__ volatile("msr daifset, #0xf" ::: "memory");
+                for (;;)
+                    __asm__ volatile("wfe");
+            }
+            if (gate_rc != 0) {
+                printf("Update trial gate refused handoff (%d); booting base image\n",
+                       gate_rc);
+                remember_selected_boot(1, 0);
+                prepare_boot();
+                arm64_boot_linux(linux_base, device_tree_address, 4);
+            }
+        }
+        remember_selected_boot(boot_target,selected_device_tree);
+#endif
         if (entry->flags & MF_ENTRY_FLAG_COPY) {
             uint64_t source_address = linux_base + entry->offset;
             printf("Copying ");

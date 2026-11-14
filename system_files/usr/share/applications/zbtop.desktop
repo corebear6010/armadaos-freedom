@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=zbtop
+Name[zh_CN]=zbtop（中文）
+GenericName=System Monitor
+GenericName[zh_CN]=系统监视器
+Comment=Chinese resource monitor
+Comment[zh_CN]=以中文查看处理器、内存、磁盘、网络和进程状态
+Icon=btop
+Exec=/usr/bin/zbtop
+Terminal=true
+Categories=System;Monitor;ConsoleOnly;
+Keywords=system;process;task;Chinese;

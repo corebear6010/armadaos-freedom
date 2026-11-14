@@ -12,17 +12,26 @@ jobs:
   label:
     name: Apply device label
     runs-on: ubuntu-22.04
-    if: contains(github.event.issue.body, '### Hardware Device')
+    if: contains(github.event.issue.body, '### 设备 / Hardware Device') || contains(github.event.issue.body, '### Hardware Device')
     steps:
       - name: Determine device label
         id: device
         env:
           BODY: ${{ github.event.issue.body }}
         run: |
-          device=$(printf '%s' "$BODY" | sed -n '/^### Hardware Device[[:space:]]*$/{n;n;p;q}')
+          device=$(printf '%s' "$BODY" | sed -n '/^### \(设备 \/ \)\?Hardware Device[[:space:]]*$/{n;n;p;q}')
           device=$(printf '%s' "$device" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
 
           case "$device" in
+            *[Tt][Bb]322[Ff][Cc]*)
+              label='device: lenovo-tb322fc'
+              ;;
+            *[Tt][Bb]323[Ff][Uu]*)
+              label='device: lenovo-tb323fu'
+              ;;
+            *[Tt][Bb]710[Ff][Uu]*)
+              label='device: lenovo-tb710fu'
+              ;;
             'Select a device...')
               label='device: unknown'
               ;;
@@ -71,9 +80,11 @@ jobs:
           echo "label=$label" >> "$GITHUB_OUTPUT"
 
       - name: Apply device label
+        if: steps.device.outputs.label != ''
         env:
           num: ${{ github.event.issue.number }}
           GITHUB_TOKEN: ${{ github.token }}
           LABEL: ${{ steps.device.outputs.label }}
         run: |
+          gh label create "$LABEL" --repo "$GITHUB_REPOSITORY" --color "285580" --force
           gh issue edit "$num" --repo "$GITHUB_REPOSITORY" --add-label "$LABEL"

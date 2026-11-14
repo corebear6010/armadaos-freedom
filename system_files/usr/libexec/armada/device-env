@@ -41,17 +41,23 @@ case "$model" in
     "Retroid Pocket Nova") profile=retroid-pocket-nova ;;
     "Lenovo Legion Tab Y700 5th Gen"|"Lenovo Legion Y700 Gen 5 (TB323FU)"|"Lenovo Legion Tab Y700 (TB323FU)") profile=lenovo-tb323fu ;;
     "Lenovo Legion Y700 Gen4") profile=lenovo-tb322fc ;;
+    "Lenovo Xiaoxin Pad Pro GT (TB710FU)") profile=lenovo-tb710fu ;;
     *) profile= ;;
 esac
 
-# An exact NUL-separated "lenovo,elden" compatible token identifies the Gen4
-# board even when its model string is unrecognized, and takes precedence over a
-# conflicting model. An explicit nonempty ARMADA_MODEL stays the top-priority
-# override, so the compatible is only consulted for a detected model.
+# An exact NUL-separated "lenovo,elden" (Gen4) or "lenovo,tb710fu"
+# compatible token identifies the board even when its model string is
+# unrecognized, and takes precedence over a conflicting model. An explicit
+# nonempty ARMADA_MODEL stays the top-priority override, so the compatible is
+# only consulted for a detected model.
 if [[ -z "${ARMADA_MODEL:-}" && -r "$dt_root/compatible" ]]; then
     while IFS= read -r -d '' entry || [[ -n "$entry" ]]; do
         if [[ "$entry" == "lenovo,elden" ]]; then
             profile=lenovo-tb322fc
+            break
+        fi
+        if [[ "$entry" == "lenovo,tb710fu" ]]; then
+            profile=lenovo-tb710fu
             break
         fi
     done <"$dt_root/compatible"
@@ -136,6 +142,7 @@ vars=(
     ARMADA_PRIMARY_TOUCHSCREEN
     ARMADA_SECONDARY_TOUCHSCREEN
     ARMADA_DESKTOP_TOUCHSCREEN_CALIBRATION
+    ARMADA_GAMEMODE_PEN_TOUCH
     ARMADA_PANEL_TYPE
     ARMADA_PANEL_ORIENTATION
     ARMADA_GAMESCOPE_USE_ROTATION_SHADER
@@ -144,6 +151,7 @@ vars=(
     ARMADA_GAMEPAD_QUIRK
     ARMADA_BUILTIN_GAMEPAD
     ARMADA_IP_TARGETS
+    ARMADA_USB_NETWORK
     ARMADA_LITTLE_CORES
     ARMADA_BIG_CORES
     ARMADA_PRIME_CORES

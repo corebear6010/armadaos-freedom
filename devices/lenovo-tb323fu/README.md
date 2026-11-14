@@ -16,6 +16,7 @@ ArmadaOS Freedom 为 Y700 五代提供 kShimC 多系统启动、Steam 游戏模�
 |---|---|
 | 机身 Linux | 统一 Linux 7.2.6 已启动到 Steam，原生 DRM／Adreno 840 显示已运行 |
 | 内屏显示 | 30／60／90／120／165 Hz 档位按机型匹配，真实 165 Hz 时序已接入 |
+| 硬件旋转 | SM8850 DPU 旋转与游戏/HUD 两层直出已在动态 PV 验证，详见[硬件旋转说明](docs/dpu-rotation.md) |
 | kShimC 启动菜单 | STAR_CHART 中英文菜单，提供 Android、机身／TF 卡 Linux、设置和高级启动入口 |
 | 输入与性能配置 | 已接入设备识别、CPU 拓扑、性能配置及桌面触摸校准 |
 | 音频与网络 | 已有扬声器保护、双 USB 路由和 5 GHz Wi-Fi 扫描适配 |
@@ -49,7 +50,7 @@ ArmadaOS Freedom 为 Y700 五代提供 kShimC 多系统启动、Steam 游戏模�
 
 引导构建见[五代引导说明](boot/star-chart-build/README.md)，外置 initramfs 见[配套说明](boot/star-chart-build/EXTERNAL_INITRAMFS.md)。统一内核使用 `tb323fu_unified_defconfig` 启动器配置和五代专用启动载荷；**两代 boot 镜像不能互刷**。
 
-系统更新目标为 Freedom 的 `ghcr.io/mydanyi/armadaos-freedom`，支持 `stable`、`beta`、`testing` 渠道。现有 `armada-kshim-sync` 按四代 Elden 匹配，不能将它当作五代已完成的 OTA 支持。
+系统更新目标为 Freedom 的 `ghcr.io/armadaos-freedom/armadaos-freedom`，支持 `stable`、`beta`、`testing` 渠道。现有 `armada-kshim-sync` 按四代 Elden 匹配，不能将它当作五代已完成的 OTA 支持。
 
 ## 源码与来源
 

@@ -1,0 +1,61 @@
+# Native host tools for the Freedom EDL package build.
+# The producer, the splitter and skopeo run from this image; the source tree and
+# the seed payload are mounted at run time and never copied into the image.
+FROM registry.fedoraproject.org/fedora:42
+
+ENV LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8 \
+    PYTHONDONTWRITEBYTECODE=1
+
+RUN dnf install -y --setopt=install_weak_deps=False \
+        python3 \
+        python3-gobject \
+        glib2 \
+        ostree \
+        bootc \
+        git \
+        btrfs-progs \
+        e2fsprogs \
+        util-linux \
+        dtc \
+        dracut \
+        tar \
+        gzip \
+        xz \
+        skopeo \
+        coreutils \
+        findutils \
+        rpm \
+    && dnf clean all \
+    && rm -rf /var/cache/dnf /var/cache/libdnf5
+
+RUN python3 -c 'import gi; gi.require_version("OSTree", "1.0"); gi.require_version("Gio", "2.0"); from gi.repository import Gio, OSTree'
+
+RUN for tool in \
+        python3 \
+        ostree \
+        bootc \
+        git \
+        skopeo \
+        rpm \
+        dtc \
+        lsinitrd \
+        fdtget \
+        fdtput \
+        mkfs.ext4 \
+        e2fsck \
+        mkfs.btrfs \
+        btrfs \
+        losetup \
+        mount \
+        umount \
+        blkid \
+        tar \
+        gzip \
+        xz \
+        sha256sum \
+        find; do \
+        command -v "$tool" >/dev/null 2>&1 || { echo "missing required tool: $tool" >&2; exit 1; }; \
+    done
+
+CMD ["bash"]

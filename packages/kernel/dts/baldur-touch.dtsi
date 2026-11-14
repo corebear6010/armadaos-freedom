@@ -22,7 +22,8 @@
 	touchscreen@0 {
 		compatible = "novatek,NVT-ts-spi";
 		reg = <0>;
-		spi-max-frequency = <19200000>;
+		/* 4.8 MHz: validated on this panel; vendor's 19.2 MHz did not work */
+		spi-max-frequency = <4800000>;
 
 		pinctrl-0 = <&ts_int_default>, <&ts_reset_default>;
 		pinctrl-names = "default";

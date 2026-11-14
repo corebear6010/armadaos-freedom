@@ -3,8 +3,9 @@
 """Offline Gen4 TB322FC Linux first-boot packaging driver (Linux, stdlib only).
 
 Drives the external MBKP packer, the supplied UnpackTool, the supplied
-v4 boot repacker (repack_boot_v4.py), gzip and the official avbtool over one
-fixed multi-boot layout and asserts byte-level round-trip correctness.  Two
+v4 boot repacker (repack_boot_v4.py), gzip, the mandatory kshim AVB signer and
+the official avbtool over one fixed multi-boot layout and asserts byte-level
+round-trip and signed-AVB correctness. Two
 layouts are supported: the 5-entry maintenance layout (stock Android,
 maintenance Linux + DTB, initramfs Blob, attached Shim) and the 7-entry
 installed layout (stock Android, internal Linux owner, a diagnostic alias that
@@ -36,6 +37,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import uuid
 
 sys.dont_write_bytecode = True
 
@@ -53,6 +55,11 @@ MANIFEST_ENTRY_SIZE = 56
 MANIFEST_ENTRY_ALIGN = 4
 FDT_MAGIC = 0xD00DFEED
 AVB_MAGIC = b"AVBf"
+AVB_ALGORITHM = "SHA256_RSA4096"
+AVB_KEY_PUBLIC_SHA1 = "2597c218aae470a130f61162feaae70afd97f011"
+AVB_RELEASE_STRING = "freedom-edl-direct"
+AVB_SIGNER = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "kshim-avb-sign.py")
 
 MF_TYPE_LINUX = 1
 MF_TYPE_SHIM = 3
@@ -640,6 +647,8 @@ def main():
     parser.add_argument("--unpacker", required=True)
     parser.add_argument("--repacker", required=True)
     parser.add_argument("--avbtool", required=True)
+    parser.add_argument("--avb-key", required=True)
+    parser.add_argument("--avb-signer", default=AVB_SIGNER)
     parser.add_argument("--bootargs")
     parser.add_argument("--installer-result")
     parser.add_argument("--boot-dir")
@@ -700,6 +709,8 @@ def main():
         "unpacker": os.path.abspath(args.unpacker),
         "repacker": os.path.abspath(args.repacker),
         "avbtool": os.path.abspath(args.avbtool),
+        "avb_key": os.path.abspath(args.avb_key),
+        "avb_signer": os.path.abspath(args.avb_signer),
     }
     OUT = os.path.abspath(args.out)
 
@@ -788,7 +799,7 @@ def prepare_environment(inputs):
 
 
 def build_dtb(inputs, bootargs, boot_stage="maintenance", root_medium=None,
-              initrd_index=3, tag=""):
+              initrd_index=3, tag="", transaction_uuid=None):
     """Copy the supplied DTB into WORK and set only the allowlisted /chosen
     properties. Returns (derived_path, derived_bytes, changed, dts_paths).
 
@@ -800,12 +811,24 @@ def build_dtb(inputs, bootargs, boot_stage="maintenance", root_medium=None,
     """
     set_stage("dtb")
 
+    transaction_bytes = None
+    if transaction_uuid is not None:
+        if not isinstance(transaction_uuid, str):
+            raise StageError(STAGE, "transaction UUID must be a canonical string")
+        try:
+            parsed_transaction = uuid.UUID(transaction_uuid)
+        except ValueError as exc:
+            raise StageError(STAGE, "invalid transaction UUID") from exc
+        if parsed_transaction.int == 0 or str(parsed_transaction) != transaction_uuid:
+            raise StageError(STAGE, "transaction UUID must be canonical and nonzero")
+        transaction_bytes = parsed_transaction.bytes
+
     def tagged(name):
         return (tag + "-" + name) if tag else name
 
-    allowed_chosen = ALLOWED_CHOSEN_PROPS
+    allowed_chosen = ALLOWED_CHOSEN_PROPS | {"armada,update-transaction"}
     if root_medium is not None:
-        allowed_chosen = ALLOWED_CHOSEN_PROPS | {"armada,root-medium"}
+        allowed_chosen = allowed_chosen | {"armada,root-medium"}
 
     source = read_bytes(inputs["dtb"], "source dtb")
     check("dtb:magic", len(source) >= 8 and be32(source, 0) == FDT_MAGIC,
@@ -844,14 +867,21 @@ def build_dtb(inputs, bootargs, boot_stage="maintenance", root_medium=None,
     with open(before_dts, encoding="utf-8", errors="replace") as handle:
         before_text = handle.read()
 
-    # Remove any stale initrd address properties before writing the entry cell.
+    # Remove stale properties before writing current values.
     rc, props = run_capture([TOOL["fdtget"], "-p", derived, "/chosen"],
                             tagged("fdtget-props-chosen"))
     present = set(props.decode("utf-8", "replace").split())
-    for stale in ("linux,initrd-start", "linux,initrd-end"):
+    for stale in ("linux,initrd-start", "linux,initrd-end",
+                  "armada,update-transaction"):
         if stale in present:
             run_capture([TOOL["fdtput"], "-d", derived, "/chosen", stale],
                         tagged("fdtput-remove-" + stale.replace(",", "_")))
+
+    if transaction_bytes is not None:
+        run_capture([TOOL["fdtput"], "-t", "bx", derived, "/chosen",
+                     "armada,update-transaction"] +
+                    [format(byte, "02x") for byte in transaction_bytes],
+                    tagged("fdtput-update-transaction"))
 
     run_capture([TOOL["fdtput"], "-t", "s", derived, "/chosen", "bootargs",
                  bootargs], tagged("fdtput-bootargs"))
@@ -909,6 +939,33 @@ def build_dtb(inputs, bootargs, boot_stage="maintenance", root_medium=None,
                                    tagged("fdtget-root-medium"))
         check("dtb:derived-root-medium", got_medium == root_medium,
               "root-medium=%r expected=%r" % (got_medium, root_medium))
+    if transaction_bytes is not None:
+        rc, transaction_raw = run_capture(
+            [TOOL["fdtget"], "-t", "bx", derived, "/chosen",
+             "armada,update-transaction"],
+            tagged("fdtget-update-transaction"))
+        tokens = transaction_raw.decode("ascii").split()
+        try:
+            got_values = [int(token, 16) for token in tokens]
+        except ValueError:
+            raise StageError(STAGE, "dtb:derived-update-transaction: malformed "
+                             "byte token in %r" % (tokens,))
+        if len(got_values) != 16 or any(value < 0 or value > 255 for value in got_values):
+            raise StageError(STAGE, "dtb:derived-update-transaction: expected 16 "
+                             "bytes, got %r" % (tokens,))
+        got_transaction = bytes(got_values)
+        check("dtb:derived-update-transaction",
+              got_transaction == transaction_bytes,
+              "update-transaction=%r expected=%r" %
+              (got_transaction, transaction_bytes))
+    else:
+        rc, transaction_props = run_capture(
+            [TOOL["fdtget"], "-p", derived, "/chosen"],
+            tagged("fdtget-props-update-transaction"))
+        check("dtb:derived-update-transaction-absent",
+              "armada,update-transaction" not in
+              transaction_props.decode("utf-8", "replace").split(),
+              "stale update-transaction property remains")
 
     return derived, derived_bytes, changed, {"source_dts": before_dts,
                                              "derived_dts": after_dts}
@@ -1084,7 +1141,8 @@ def run_driver(inputs, source_label, bootargs, default_entry=None,
     linux_reserved = align_up(len(padded), 4096)
     bss_pad = linux_reserved - len(padded)
 
-    for key in ("packer", "unpacker", "repacker", "avbtool"):
+    for key in ("packer", "unpacker", "repacker", "avbtool",
+                "avb_key", "avb_signer"):
         check("tool:%s" % key, os.path.isfile(inputs[key]), inputs[key])
 
     source_digests = {key: sha256_file(path) for key, path in inputs.items()}
@@ -1520,6 +1578,17 @@ def run_driver(inputs, source_label, bootargs, default_entry=None,
          "--report", repack_report,
          "--avbtool", inputs["avbtool"]], "repacker")
 
+    set_stage("avb-sign")
+    signing_report = os.path.join(OUT, "avb-signing.json")
+    run([sys.executable, "-B", inputs["avb_signer"],
+         "--image", final_boot,
+         "--stock-boot", inputs["stock_boot"],
+         "--avbtool", inputs["avbtool"],
+         "--key", inputs["avb_key"],
+         "--report", signing_report], "avb-signing")
+    with open(signing_report, encoding="utf-8") as handle:
+        signing = json.load(handle)
+
     set_stage("assert-boot")
     final = read_bytes(final_boot, "boot.img")
     final_boot_header = parse_boot_header(final)
@@ -1575,7 +1644,7 @@ def run_driver(inputs, source_label, bootargs, default_entry=None,
     set_stage("avb")
     verify_log = os.path.join(LOGS, "avbtool_verify_image.stdout")
     run([sys.executable, "-B", inputs["avbtool"], "verify_image", "--image",
-         final_boot], "avbtool_verify_image")
+         final_boot, "--key", inputs["avb_key"]], "avbtool_verify_image")
     run([sys.executable, "-B", inputs["avbtool"], "info_image", "--image",
          final_boot], "avbtool_info_image")
     info_log = os.path.join(LOGS, "avbtool_info_image.stdout")
@@ -1584,8 +1653,15 @@ def run_driver(inputs, source_label, bootargs, default_entry=None,
     algorithm_match = re.search(r"^\s*Algorithm:\s*(\S+)", info_text, re.M)
     check("avb:algorithm-line", algorithm_match is not None,
           "no anchored Algorithm line in info_image output")
-    check("avb:algorithm-none", algorithm_match.group(1) == "NONE",
+    check("avb:algorithm-signed", algorithm_match.group(1) == AVB_ALGORITHM,
           "algorithm=%s" % algorithm_match.group(1))
+    check("avb:key-sha1", AVB_KEY_PUBLIC_SHA1 in info_text,
+          "AVB public key SHA1 is not the pinned AOSP test key")
+    check("avb:release-string", AVB_RELEASE_STRING in info_text,
+          "AVB release string is not %s" % AVB_RELEASE_STRING)
+    check("avb:signing-report",
+          signing.get("avb", {}).get("signature_verified") is True,
+          "AVB signer did not report verified output")
 
     set_stage("recheck-sources")
     for key, path in inputs.items():
@@ -1654,7 +1730,7 @@ def run_driver(inputs, source_label, bootargs, default_entry=None,
         "inputs": {
             key: {"path": inputs[key], "length": source_sizes[key],
                   "sha256": source_digests[key]}
-            for key in sorted(inputs)
+            for key in sorted(inputs) if key != "avb_key"
         },
         "tools": dict(TOOL),
         "stock_image": {
@@ -1725,9 +1801,14 @@ def run_driver(inputs, source_label, bootargs, default_entry=None,
         },
         "avb": {
             "algorithm": algorithm_match.group(1),
+            "signed": True,
+            "key_public_sha1": AVB_KEY_PUBLIC_SHA1,
+            "release_string": AVB_RELEASE_STRING,
             "original_image_size": ois,
             "vbmeta_offset": vbo,
             "vbmeta_size": vbs,
+            "signing_report": signing_report,
+            "signing": signing,
             "verify_image_log": verify_log,
             "info_image_log": info_log,
         },

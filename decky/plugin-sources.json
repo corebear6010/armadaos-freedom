@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "releases": [
+    {
+      "name": "DeckyClash",
+      "directory": "DeckyClash",
+      "repository": "chenx-dust/DeckyClash",
+      "assetPattern": "DeckyClash-full-linux-arm64.zip"
+    }
+  ],
+  "git": [
+    {
+      "name": "Freedom Control",
+      "directory": "armada-control",
+      "path": "decky/freedom-control",
+      "repository": "ArmadaOS-Freedom/freedom-control",
+      "branch": "main",
+      "packagePath": "decky/armada-control/package.json"
+    }
+  ],
+  "inTree": [
+    {
+      "name": "Armada Store",
+      "directory": "armada-store",
+      "packagePath": "decky/armada-store/package.json"
+    }
+  ]
+}

@@ -23,6 +23,16 @@ check: test
     just --unstable --fmt --check -f Justfile
 
 [group('Test')]
+test-update-deployment:
+    sudo env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -B tests/update-deployment-store-test.py
+    sudo env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -B tests/update-image-source-test.py
+    sudo env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -B tests/update-offline-source-test.py
+    sudo env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -B tests/update-offline-image-test.py
+    sudo env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -B tests/update-offline-payload-test.py
+    sudo env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -B tests/update-deployment-options-test.py
+    sudo env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -B tests/update-boot-materials-test.py
+
+[group('Test')]
 test:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -31,6 +41,61 @@ test:
         echo "Running test: ${test_file}"
         bash "${test_file}"
     done
+    python3 -m unittest discover -s tests -p test_plugin_sources.py
+    python3 -m unittest discover -s tests -p 'test_decky_*.py'
+    python3 -m unittest discover -s tests -p 'test_update_*.py'
+    python3 -m unittest tests/kshim-avb-sign-test.py
+    python3 -m unittest tests/kshim-prepare-test.py
+    python3 -m unittest tests/kshim-sync-test.py
+    python3 -m unittest tests/kshim-state-test.py
+    python3 -m unittest tests/kshim-hooks-test.py
+    python3 -m unittest tests/test_tb322fc_hw_rotation_trial.py
+    python3 tests/organization-migration-test.py
+    python3 tests/ci-signing-test.py
+
+# EDL filesystem tests; needs privileged containers, separate from `just test`
+[group('Test')]
+test-edl-package:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    source="$(git rev-parse --show-toplevel)"
+    # A per-invocation tag avoids clobbering or deleting another run's image.
+    tools_image="localhost/armada/edl-tools:test-$$"
+    build_ok=0
+    cleanup() {
+        # Only the tag this run created, and only when this run built it; a
+        # non-force removal never touches shared layers or other tags.
+        if [[ "${build_ok}" -eq 1 ]]; then
+            docker image rm "${tools_image}" || true
+        fi
+    }
+    trap cleanup EXIT
+
+    docker build \
+        --file "${source}/build_files/Containerfile.edl-tools" \
+        --tag "${tools_image}" \
+        "${source}/build_files"
+    build_ok=1
+
+    # The tests create loop devices and btrfs filesystems, so /work is a local
+    # scratch directory inside the checkout rather than a shared tmpfs.
+    work="$(mktemp -d "${source}/_build-edl-test.XXXXXX")"
+    docker run \
+        --rm \
+        --privileged \
+        --cpus 4 \
+        --memory 6g \
+        --volume "${source}:/source:ro" \
+        --volume "${work}:/work" \
+        --env TMPDIR=/work \
+        --env PYTHONDONTWRITEBYTECODE=1 \
+        --env TEST_ARTIFACT_ROOT=/work \
+        --workdir /source \
+        "${tools_image}" \
+        bash -c 'set -euo pipefail
+            python3 -m unittest discover -s tests -p "test_edl*.py"
+            python3 tests/test_split_package_archive.py'
 
 [group('Just')]
 fix:
@@ -76,7 +141,11 @@ sudoif command *args:
     sudoif {{ command }} {{ args }}
 
 # Registry holding published package images (override to use a fork's)
-export pkg_registry := env("ARMADA_PKG_REGISTRY", "ghcr.io/armada-os/armada/pkg")
+export pkg_registry := env("ARMADA_PKG_REGISTRY", "ghcr.io/armadaos-freedom/armada/pkg")
+
+# Registry consulted when a package is absent from pkg_registry
+# (override to use another source)
+export pkg_fallback_registry := env("ARMADA_PKG_FALLBACK_REGISTRY", "ghcr.io/armada-os/armada/pkg")
 
 # Build one package and tag it by content hash, the way CI does
 [group('Packages')]
@@ -114,25 +183,51 @@ packages:
 packages-status:
     #!/usr/bin/env bash
     set -euo pipefail
+    failed=0
     for dir in packages/*/; do
         pkg="$(basename "${dir}")"
         [ -f "${dir}/build.sh" ] || continue
         hash="$(packages/package-hash.sh "${pkg}")"
         if podman image exists "localhost/armada/pkg/${pkg}:${hash}" 2>/dev/null; then
             printf '  %-24s %s  local\n' "${pkg}" "${hash}"
+            continue
+        fi
+        status=0
+        actual="$(bash packages/resolve-package-ref.sh "${pkg}" "${hash}" "${pkg_registry}" "${pkg_fallback_registry}")" || status=$?
+        if [ "${status}" -eq 0 ]; then
+            printf '  %-24s %s  %s\n' "${pkg}" "${hash}" "${actual}"
+        elif [ "${status}" -eq 3 ]; then
+            printf '  %-24s %s  missing\n' "${pkg}" "${hash}"
+            failed=1
         else
-            printf '  %-24s %s  %s\n' "${pkg}" "${hash}" "${pkg_registry}/${pkg}:${hash}"
+            printf '  %-24s %s  lookup-error (exit %s)\n' "${pkg}" "${hash}" "${status}"
+            failed=1
         fi
     done
+    exit "${failed:-0}"
 
 build $target_image=image_name $tag=default_tag:
     #!/usr/bin/env bash
     set -euo pipefail
 
+    REFS="$(mktemp)"
+    BOOT_TOOL_SOURCE="$(mktemp -d _build-boot-tool.XXXXXX)"
+    trap 'rm -f "${REFS}" && rm -rf -- "${BOOT_TOOL_SOURCE}"' EXIT
+
+    BOOT_TOOL_SOURCE_ARGS=()
+    if [[ -n "${ARMADA_BOOT_TOOL_LOCAL_SOURCE:-}" ]]; then
+        BOOT_TOOL_SOURCE_ARGS+=("--local-source" "${ARMADA_BOOT_TOOL_LOCAL_SOURCE}")
+    fi
+    python3 build_files/prepare-boot-tool-source.py \
+        --output "${BOOT_TOOL_SOURCE}" \
+        "${BOOT_TOOL_SOURCE_ARGS[@]}"
+
+    # Resolve the latest bundled plugin sources before any package lookup or
+    # image build, so the layers never come from a cached earlier resolution.
+    python3 build_files/resolve-plugin-sources.py
+
     # Resolve every package to an image: one built locally if present, else
     # the published one for that content hash.
-    REFS="$(mktemp)"
-    trap 'rm -f "${REFS}"' EXIT
     for dir in packages/*/; do
         pkg="$(basename "${dir}")"
         [ -f "${dir}/build.sh" ] || continue
@@ -141,8 +236,18 @@ build $target_image=image_name $tag=default_tag:
         local_ref="localhost/armada/pkg/${pkg}:${hash}"
         if podman image exists "${local_ref}" 2>/dev/null; then
             echo "${var}=${local_ref}" >> "${REFS}"
+            continue
+        fi
+        status=0
+        actual="$(bash packages/resolve-package-ref.sh "${pkg}" "${hash}" "${pkg_registry}" "${pkg_fallback_registry}")" || status=$?
+        if [ "${status}" -eq 0 ]; then
+            echo "${var}=${actual}" >> "${REFS}"
+        elif [ "${status}" -eq 3 ]; then
+            echo "${pkg}:${hash} is not built locally and is not published; run 'just package ${pkg}' first" >&2
+            exit 1
         else
-            echo "${var}=${pkg_registry}/${pkg}:${hash}" >> "${REFS}"
+            echo "Failed to resolve ${pkg}:${hash} from published registries (exit ${status})" >&2
+            exit "${status}"
         fi
     done
     expected=$(grep -c '^ARG [A-Z0-9_]*_REF$' Containerfile)
@@ -150,6 +255,7 @@ build $target_image=image_name $tag=default_tag:
     [ "${expected}" -eq "${got}" ] || { echo "Containerfile wants ${expected} refs, resolved ${got}" >&2; exit 1; }
 
     ARMADA_VERSION="$(TZ=America/New_York date +%Y%m%d).$(git rev-parse --short HEAD)"
+    ARMADA_REVISION="$(git rev-parse HEAD)"
 
     SECRET_ARGS=()
     if [[ -n "${GITHUB_TOKEN:-}" ]]; then
@@ -158,6 +264,8 @@ build $target_image=image_name $tag=default_tag:
 
     podman build \
         --build-arg "ARMADA_VERSION=${ARMADA_VERSION}" \
+        --build-arg "ARMADA_REVISION=${ARMADA_REVISION}" \
+        --build-arg "BOOT_TOOL_SOURCE=${BOOT_TOOL_SOURCE}" \
         --build-arg-file "${REFS}" \
         "${SECRET_ARGS[@]}" \
         --platform linux/arm64 \
@@ -297,6 +405,60 @@ build-armada-image $target_image=("localhost/" + image_name) $tag=default_tag: (
         export OUT="output/armada-${version}.img.gz"
     fi
     ./post_process/finalize-armada-image.sh output/image/disk.raw
+
+# Build the 9008/EDL package from IMAGE (OCI ref with channel, or an absolute
+# OCI layout directory), DIGEST, REVISION and VERSION; ORIGIN is required for a
+# layout directory. Output: ./output/edl/<version>/
+[group('Armada')]
+build-edl-package $image $digest $revision $version $origin="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    source="$(git rev-parse --show-toplevel)"
+    # The wrapper needs a fresh work path that does not exist yet, so create
+    # only the parent; both names are covered by the _build* ignore rule.
+    build_parent="$(mktemp -d "${source}/_build-edl.XXXXXX")"
+    output="${source}/output/edl/${version}"
+
+    # The wrapper owns Docker, its tools/runtime images, the OCI pull and the
+    # volume split; the recipe only supplies the source, work and output paths.
+    bash "${source}/build_files/build-edl-package.sh" \
+        --oci "${image}" \
+        --manifest-digest "${digest}" \
+        --source-commit "${revision}" \
+        --version "${version}" \
+        ${origin:+--origin "${origin}"} \
+        --source "${source}" \
+        --work "${build_parent}/work" \
+        --output "${output}"
+
+# Build the 9008/EDL package from a locally built image (just build), using the
+# image's own version and revision labels. ORIGIN is the signed origin the
+# devices update from (ostree-image-signed:docker://ghcr.io/armadaos-freedom/
+# armadaos-freedom:stable|beta|testing). Output: ./output/edl/<version>/
+[group('Armada')]
+build-edl-package-local $origin $target_image=("localhost/" + image_name) $tag=default_tag:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    source="$(git rev-parse --show-toplevel)"
+    command -v skopeo >/dev/null || { echo "skopeo is required to export the local image" >&2; exit 1; }
+    ref="containers-storage:${target_image}:${tag}"
+    # Check the labels before exporting the image.
+    version="$(skopeo inspect --format '{{{{ index .Labels "org.opencontainers.image.version" }}' "${ref}")"
+    revision="$(skopeo inspect --format '{{{{ index .Labels "org.opencontainers.image.revision" }}' "${ref}")"
+    if [[ -z "${version}" || "${version}" == unknown || "${version}" == "<no value>" || ! "${revision}" =~ ^[0-9a-f]{40}$ ]]; then
+        echo "${target_image}:${tag} has no version/revision labels (version '${version}', revision '${revision}'); rebuild it with 'just build'" >&2
+        exit 1
+    fi
+    # The OCI copy is several GB; it is only needed while the package is built.
+    oci_parent="$(mktemp -d "${source}/_build-edl-oci.XXXXXX")"
+    trap 'rm -rf "${oci_parent}"' EXIT
+    oci="${oci_parent}/oci"
+    # The producer reads the image as oci:<dir>:latest.
+    skopeo copy "${ref}" "oci:${oci}:latest"
+    digest="$(skopeo inspect --format '{{{{ .Digest }}' "oci:${oci}:latest")"
+    just build-edl-package "${oci}" "${digest}" "${revision}" "${version}" "${origin}"
 
 [group('Build Virtual Machine Image')]
 rebuild-qcow2 $target_image=("localhost/" + image_name) $tag=default_tag: && (_rebuild-bib target_image tag "qcow2" "disk_config/disk.toml")

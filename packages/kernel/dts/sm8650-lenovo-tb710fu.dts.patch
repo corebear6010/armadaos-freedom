@@ -1,0 +1,230 @@
+From: Armada <noreply@armada.local>
+Subject: [PATCH] arm64: dts: qcom: tb710fu: board additions for the kShimC boot
+
+The board file is vendored from tb710fu-linux; this patch is the whole
+TB710FU delta on top of it. It was three device-tree overlays (board, touch,
+audio) merged by fdtoverlay while the board lived in a kernel overlay; the
+blocks are appended here in the same order and unchanged (their #includes
+moved to the top). The built tree has the same nodes and properties as the
+old composite DTB (compared after decompiling, phandle values resolved); it
+no longer carries __symbols__, like the other board DTBs.
+
+Board: the simple-framebuffer template kShimC fills with the ABL scanout,
+the 903 MHz GPU level of the vendor DTB, the unit's own ADSP/CDSP firmware
+paths, the TB710FU touchscreen compatible, and uart15 enabled. The
+original port's boot-log reservations, the video codec and another unit's
+Bluetooth address are dropped.
+
+Touch: novatek,pen-support, as in the vendor dtbo, so the NT36532 driver
+registers the pen.
+
+Audio: four AW882xx amplifiers on i2c_hub_4, fed by SECONDARY_TDM_RX_0
+(slots 0-3 of an 8 x 32-bit frame), and the lenovo,tb710fu-sndcard card.
+The amplifiers name their parameter file with firmware-name, so it does not
+collide with another board's bare aw882xx_acf.bin.
+
+--- a/arch/arm64/boot/dts/qcom/sm8650-lenovo-tb710fu.dts
++++ b/arch/arm64/boot/dts/qcom/sm8650-lenovo-tb710fu.dts
+@@ -17,6 +17,9 @@
+ #include <dt-bindings/regulator/qcom,rpmh-regulator.h>
+ #include <dt-bindings/pinctrl/qcom,pmic-gpio.h>
+ #include <dt-bindings/leds/common.h>
++#include <dt-bindings/power/qcom,rpmhpd.h>
++#include <dt-bindings/gpio/gpio.h>
++#include <dt-bindings/sound/qcom,q6dsp-lpass-ports.h>
+ #include "sm8650.dtsi"
+ #include "pm8550.dtsi"
+ #include "pm8550b.dtsi"
+@@ -1259,4 +1262,192 @@
+ 
+ &xo_board {
+ 	clock-frequency = <76800000>;
++};
++
++/*
++ * Lenovo Xiaoxin Pad Pro GT (TB710FU): board additions on top of the
++ * tb710fu-linux board tree, for booting from the kShimC menu in boot_a.
++ */
++
++/*
++ * kShimC fills this template with the scanout ABL left running and enables
++ * it; it is the console until msm takes over.
++ */
++&{/chosen} {
++	framebuffer0: framebuffer@d5100000 {
++		compatible = "simple-framebuffer";
++		reg = <0x0 0xd5100000 0x0 (3200 * 2000 * 4)>;
++		width = <3200>;
++		height = <2000>;
++		stride = <(3200 * 4)>;
++		format = "a8r8g8b8";
++		status = "disabled";
++	};
+ };
++
++/* boot-log rings of the original port's debug kernel; nothing uses them here */
++&blackbox_a_mem {
++	status = "disabled";
++};
++
++&blackbox_b_mem {
++	status = "disabled";
++};
++
++/* the video codec is not brought up yet */
++&iris {
++	status = "disabled";
++};
++
++&uart15 {
++	status = "okay";
++};
++
++/* the unit's own address (little-endian), all zeros = unset */
++&uart14 {
++	bluetooth {
++		local-bd-address = [00 00 00 00 00 00];
++	};
++};
++
++/*
++ * Bind the touch controller to the TB710FU NT36532 driver only:
++ * "novatek,NVT-ts-spi" belongs to the NT36536 driver (nt36536_ts).
++ */
++&spi4 {
++	touchscreen@0 {
++		compatible = "novatek,nt36532-ts-spi";
++	};
++};
++
++/* the unit's own images (devices/lenovo-tb710fu/firmware), joined from its split /vendor/firmware_mnt/image files */
++&remoteproc_adsp {
++	firmware-name = "qcom/sm8650/xiaoxin/gt/adsp.mbn",
++			"qcom/sm8650/xiaoxin/gt/adsp_dtb.mbn";
++};
++
++&remoteproc_cdsp {
++	firmware-name = "qcom/sm8650/xiaoxin/gt/cdsp.mbn",
++			"qcom/sm8650/xiaoxin/gt/cdsp_dtb.mbn";
++};
++
++/* GPU top level as in the vendor DTB: 903 MHz at TURBO, same ACD value as 834 MHz */
++&gpu_opp_table {
++	opp-903000000 {
++		opp-hz = /bits/ 64 <903000000>;
++		opp-level = <RPMH_REGULATOR_LEVEL_TURBO>;
++		opp-peak-kBps = <14398437>;
++		qcom,opp-acd-level = <0x882a5ffd>;
++	};
++};
++
++/*
++ * Lenovo TB710FU: active pen (Lenovo Tab Pen Plus) through the NT36532 touch
++ * IC, as in the vendor dtbo; the driver then registers "NVTCapacitivePen"
++ * (pressure, tilt, two buttons) and, with patch 0721, keeps pen scanning on
++ * after its boot firmware update; /proc/support_pen still overrides it.
++ */
++
++&spi4 {
++	touchscreen@0 {
++		novatek,pen-support;
++	};
++};
++
++/*
++ * Lenovo TB710FU speakers: four Awinic AW882xx smart amplifiers on i2c_hub_4,
++ * fed by TDM1 (SECONDARY_TDM_RX_0, slots 0-3 of an 8 x 32-bit frame), as the
++ * vendor Android configures them.
++ */
++
++&tlmm {
++	tdm1_clk_active: tdm1-clk-active-state {
++		pins = "gpio121"; function = "i2s1_sck"; drive-strength = <8>; bias-disable; output-high;
++	};
++	tdm1_clk_sleep: tdm1-clk-sleep-state {
++		pins = "gpio121"; function = "gpio"; drive-strength = <2>; bias-pull-down; input-enable;
++	};
++	tdm1_ws_active: tdm1-ws-active-state {
++		pins = "gpio123"; function = "i2s1_ws"; drive-strength = <8>; bias-disable; output-high;
++	};
++	tdm1_ws_sleep: tdm1-ws-sleep-state {
++		pins = "gpio123"; function = "gpio"; drive-strength = <2>; bias-pull-down; input-enable;
++	};
++	tdm1_din_active: tdm1-din-active-state {
++		pins = "gpio122"; function = "i2s1_data0"; drive-strength = <8>; bias-disable;
++	};
++	tdm1_din_sleep: tdm1-din-sleep-state {
++		pins = "gpio122"; function = "gpio"; drive-strength = <2>; bias-pull-down; input-enable;
++	};
++	tdm1_dout_active: tdm1-dout-active-state {
++		pins = "gpio124"; function = "i2s1_data1"; drive-strength = <8>; bias-disable;
++	};
++	tdm1_dout_sleep: tdm1-dout-sleep-state {
++		pins = "gpio124"; function = "gpio"; drive-strength = <2>; bias-pull-down; input-enable;
++	};
++};
++
++&i2c_master_hub_0 {
++	status = "okay";
++};
++
++&i2c_hub_4 {
++	status = "okay";
++	#address-cells = <1>;
++	#size-cells = <0>;
++
++	spk_amp0: aw882xx@34 {
++		compatible = "awinic,aw882xx_smartpa"; reg = <0x34>; #sound-dai-cells = <0>;
++		rename-flag = <1>; monitor-mode = "hal_monitor"; aw-cali-mode = "none";
++		aw-re-max = <30000>; aw-re-min = <4000>; sync-load = <1>; sound-channel = <0>;
++		firmware-name = "qcom/sm8650/xiaoxin/gt/aw882xx_acf.bin";
++		reset-gpios = <&tlmm 9 GPIO_ACTIVE_HIGH>;
++	};
++	spk_amp1: aw882xx@35 {
++		compatible = "awinic,aw882xx_smartpa"; reg = <0x35>; #sound-dai-cells = <0>;
++		rename-flag = <1>; monitor-mode = "hal_monitor"; aw-cali-mode = "none";
++		aw-re-max = <30000>; aw-re-min = <4000>; sync-load = <1>; sound-channel = <1>;
++		firmware-name = "qcom/sm8650/xiaoxin/gt/aw882xx_acf.bin";
++		reset-gpios = <&tlmm 8 GPIO_ACTIVE_HIGH>;
++	};
++	spk_amp2: aw882xx@36 {
++		compatible = "awinic,aw882xx_smartpa"; reg = <0x36>; #sound-dai-cells = <0>;
++		rename-flag = <1>; monitor-mode = "hal_monitor"; aw-cali-mode = "none";
++		aw-re-max = <30000>; aw-re-min = <4000>; sync-load = <1>; sound-channel = <2>;
++		firmware-name = "qcom/sm8650/xiaoxin/gt/aw882xx_acf.bin";
++		reset-gpios = <&tlmm 2 GPIO_ACTIVE_HIGH>;
++	};
++	spk_amp3: aw882xx@37 {
++		compatible = "awinic,aw882xx_smartpa"; reg = <0x37>; #sound-dai-cells = <0>;
++		rename-flag = <1>; monitor-mode = "hal_monitor"; aw-cali-mode = "none";
++		aw-re-max = <30000>; aw-re-min = <4000>; sync-load = <1>; sound-channel = <3>;
++		firmware-name = "qcom/sm8650/xiaoxin/gt/aw882xx_acf.bin";
++		reset-gpios = <&tlmm 60 GPIO_ACTIVE_HIGH>;
++	};
++};
++
++&{/} {
++	sound {
++		compatible = "lenovo,tb710fu-sndcard";
++		model = "Lenovo-TB710FU";
++		pinctrl-names = "default", "sleep";
++		pinctrl-0 = <&tdm1_clk_active &tdm1_ws_active &tdm1_din_active &tdm1_dout_active>;
++		pinctrl-1 = <&tdm1_clk_sleep &tdm1_ws_sleep &tdm1_din_sleep &tdm1_dout_sleep>;
++
++		aw-spk-dai-link {
++			link-name = "AW882xx Playback";
++			cpu {
++				sound-dai = <&q6apmbedai SECONDARY_TDM_RX_0>;
++				dai-tdm-slot-num = <8>;
++				dai-tdm-slot-width = <32>;
++				dai-tdm-slot-rx-mask = <1 1 1 1 0 0 0 0>;
++			};
++			codec {
++				sound-dai = <&spk_amp0>, <&spk_amp1>, <&spk_amp2>, <&spk_amp3>;
++			};
++			platform {
++				sound-dai = <&q6apm>;
++			};
++		};
++	};
++};
