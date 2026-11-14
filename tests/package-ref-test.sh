@@ -92,7 +92,8 @@ chmod +x "$stub_dir/skopeo"
 # Keep these tests independent of the workflow environment. The resolver's
 # auth-error override is exercised explicitly below, while the regular cases
 # must still report lookup failures as errors.
-unset ARMADA_PKG_REGISTRY ARMADA_PKG_FALLBACK_REGISTRY ARMADA_PKG_IGNORE_AUTH_ERRORS
+unset ARMADA_PKG_REGISTRY ARMADA_PKG_FALLBACK_REGISTRY \
+    ARMADA_PKG_IGNORE_AUTH_ERRORS ARMADA_PKG_ALLOW_AUTH_BUILD
 
 export PATH="$stub_dir:$PATH"
 export STUB_CALL_LOG="$call_log"
@@ -208,6 +209,23 @@ if [[ $status -ne 1 || -n $out ]]; then
 else
     printf 'PASS [ignored auth without absence]\n'
 fi
+
+# 4d. PR forks may explicitly opt into a local rebuild when both package
+# registries are inaccessible. This is used only by the read-only PR workflow;
+# the package remains content-addressed by its source hash.
+reset_calls
+write_behavior "docker://$primary/$pkg:$hash|unauthorized" "docker://$fallback/$pkg:$hash|denied"
+out=$(ARMADA_PKG_IGNORE_AUTH_ERRORS=1 ARMADA_PKG_ALLOW_AUTH_BUILD=1 \
+    bash "$resolver" "$pkg" "$hash" 2>"$workdir/stderr.log")
+status=$?
+if [[ $status -ne 3 || -n $out ]]; then
+    printf 'FAIL [allowed auth build]: status=%s out=%q\n' "$status" "$out" >&2
+    failures=$((failures + 1))
+else
+    printf 'PASS [allowed auth build]\n'
+fi
+assert_calls "allowed auth build" "docker://$primary/$pkg:$hash
+docker://$fallback/$pkg:$hash"
 
 # 5. Timeout with no fallback success exits 1.
 reset_calls

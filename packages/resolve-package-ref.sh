@@ -124,6 +124,9 @@ for registry in "${registries[@]}"; do
     elif [[ ${ARMADA_PKG_IGNORE_AUTH_ERRORS:-0} == 1 ]] &&
          is_auth_error "$err_msg"; then
         printf 'ignored auth error: %s\n' "$candidate" >&2
+        if [[ ${ARMADA_PKG_ALLOW_AUTH_BUILD:-0} == 1 ]]; then
+            had_definite_miss=1
+        fi
     else
         had_error=1
         printf 'lookup error (status %s): %s\n' "$status" "$candidate" >&2

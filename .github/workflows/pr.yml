@@ -25,6 +25,10 @@ env:
   UPSTREAM_PKG: "ghcr.io/armada-os/armada/pkg"
   UPSTREAM_CACHE: "ghcr.io/armada-os/armada/buildcache"
   ARMADA_PKG_IGNORE_AUTH_ERRORS: "1"
+  # A fork PR cannot read the private build cache. If both candidate registries
+  # reject the anonymous lookup, build the content-addressed package locally
+  # instead of blocking the PR; this workflow still never writes to a registry.
+  ARMADA_PKG_ALLOW_AUTH_BUILD: "1"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
